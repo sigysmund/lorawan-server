@@ -15,3 +15,5 @@ priv/admin/ng-google-chart.min.js
 priv/admin/ng-admin.min.css
 priv/admin/ng-admin.min.js
 log/
+.idea/
+lorawan_server.iml
