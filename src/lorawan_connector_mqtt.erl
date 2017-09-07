@@ -11,7 +11,7 @@
 
 -include("lorawan.hrl").
 
--record(state, {cargs, phase, mqttc, last_connect, connect_count,
+-record(state, {connid, cargs, phase, mqttc, last_connect, connect_count,
     ping_timer, subscribe, published, consumed}).
 
 start_link(ConnUri, Conn) ->
@@ -21,6 +21,7 @@ init([ConnUri, Conn=#connector{subscribe=Sub, published=Pub, consumed=Cons}]) ->
     process_flag(trap_exit, true),
     {_Scheme, _UserInfo, HostName, Port, _Path, _Query} = ConnUri,
     lager:debug("Connecting ~s to ~s", [Conn#connector.connid, Conn#connector.uri]),
+    ok = syn:register(Conn#connector.connid, self()),
     CArgs = lists:append([
         [{host, HostName},
         {port, Port},
@@ -30,8 +31,10 @@ init([ConnUri, Conn=#connector{subscribe=Sub, published=Pub, consumed=Cons}]) ->
         ssl_args(ConnUri, Conn)
     ]),
     % initially use MQTT 3.1.1
-    {ok, connect(attempt311, #state{cargs=CArgs, connect_count=0, subscribe=Sub,
-        published=prepare_filling(Pub), consumed=prepare_matching(Cons)})}.
+    {ok, connect(attempt311, #state{connid=Conn#connector.connid,
+        cargs=CArgs, connect_count=0, subscribe=Sub,
+        published=lorawan_connector_pattern:prepare_filling(Pub),
+        consumed=lorawan_connector_pattern:prepare_matching(Cons)})}.
 
 % Microsoft Shared Access Signature
 auth_args({_Scheme, _UserInfo, HostName, _Port, _Path, _Query},
@@ -73,21 +76,21 @@ handle_call({resubscribe, Sub2}, _From, State=#state{mqttc=C, subscribe=Sub1})
 handle_call({resubscribe, Sub2}, _From, State) ->
     % nothing to do
     {reply, ok, State#state{subscribe=Sub2}};
-handle_call(disconnect, _From, State=#state{mqttc=undefined}) ->
-    % already disconnected
-    {stop, normal, ok, State};
-handle_call(disconnect, _From, State=#state{mqttc=C}) ->
-    % the disconnected event will not be delivered
-    emqttc:disconnect(C),
-    {stop, normal, ok, State};
 handle_call(_Request, _From, State) ->
-    {stop, {error, unknownmsg}, State}.
+    {reply, {error, unknownmsg}, State}.
 
-handle_cast({publish, _Msg, _Vars}, State=#state{mqttc=undefined}) ->
+handle_cast({publish, _Message}, State=#state{mqttc=undefined}) ->
     lager:warning("MQTT broker disconnected, message lost"),
     {noreply, State};
-handle_cast({publish, Msg, Vars}, State) ->
-    handle_publish(Msg, Vars, State).
+handle_cast({publish, Message}, State) ->
+    handle_publish(Message, State);
+handle_cast(disconnect, State=#state{mqttc=undefined}) ->
+    % already disconnected
+    {stop, normal, State};
+handle_cast(disconnect, State=#state{mqttc=C}) ->
+    % the disconnected event will not be delivered
+    emqttc:disconnect(C),
+    {stop, normal, State}.
 
 handle_info({connect, Phase}, State) ->
     {noreply, connect(Phase, State)};
@@ -106,10 +109,14 @@ handle_info({'EXIT', C, Error}, State=#state{phase=attempt311, mqttc=C}) ->
 handle_info({'EXIT', C, Error}, State=#state{mqttc=C}) ->
     handle_reconnect(Error, attempt311, State);
 handle_info(Unknown, State) ->
-    lager:debug("Unknown message: ~w", [Unknown]),
+    lager:debug("Unknown message: ~p", [Unknown]),
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(normal, #state{connid=ConnId}) ->
+    lager:debug("Connector ~s terminated: normal", [ConnId]),
+    ok;
+terminate(Reason, #state{connid=ConnId}) ->
+    lager:warning("Connector ~s terminated: ~p", [ConnId, Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -119,13 +126,15 @@ handle_reconnect(Error, Phase, #state{ping_timer=Timer} = State) ->
     maybe_cancel_timer(Timer),
     handle_reconnect0(Error, Phase, State#state{mqttc=undefined, ping_timer=undefined}).
 
-handle_reconnect0(Error, Phase, #state{phase=OldPhase, last_connect=Last, connect_count=Count} = State) ->
-    lager:debug("Connector ~w ~w reconnect ~B", [OldPhase, Error, Count]),
+handle_reconnect0(Error, Phase, #state{connid=ConnId, phase=OldPhase, last_connect=Last, connect_count=Count} = State) ->
+    lager:debug("Connector ~s(~s) failed: ~p, reconnect ~B", [ConnId, OldPhase, Error, Count]),
     case calendar:datetime_to_gregorian_seconds(calendar:universal_time())
             - calendar:datetime_to_gregorian_seconds(Last) of
         Diff when Diff < 30, Count > 120 ->
+            lager:warning("Connector ~s failed to reconnect: ~p", [ConnId, Error]),
             % give up after 2 hours
-            {stop, Error, State};
+            lorawan_connector_factory:disable_connector(ConnId),
+            {stop, normal, State};
         Diff when Diff < 30, Count > 0 ->
             % wait, then wait even longer, but no longer than 30 sec
             {ok, _} = timer:send_after(erlang:min(Count*5000, 30000), {connect, Phase}),
@@ -172,13 +181,13 @@ maybe_cancel_timer(Timer) ->
     ok.
 
 
-handle_publish(Msg, Vars, State=#state{mqttc=C, published=Pattern}) ->
-    emqttc:publish(C, fill_pattern(Pattern, lorawan_admin:build(Vars)), Msg),
+handle_publish({_ContentType, Msg, Vars}, State=#state{mqttc=C, published=Pattern}) ->
+    emqttc:publish(C, lorawan_connector_pattern:fill_pattern(Pattern, lorawan_admin:build(Vars)), Msg),
     {noreply, State}.
 
 handle_consume(Topic, Msg, State=#state{consumed=Pattern}) ->
     case lorawan_application_backend:handle_downlink(Msg, undefined,
-            match_vars(Topic, Pattern)) of
+            lorawan_connector_pattern:match_vars(Topic, Pattern)) of
         ok ->
             ok;
         {error, {Object, Error}} ->
@@ -187,67 +196,6 @@ handle_consume(Topic, Msg, State=#state{consumed=Pattern}) ->
             lorawan_utils:throw_error(server, Error)
     end,
     {noreply, State}.
-
-
-prepare_filling(undefined) ->
-    undefined;
-prepare_filling(Pattern) ->
-    case re:run(Pattern, "{[^}]+}", [global]) of
-        {match, Match} ->
-            {Pattern,
-                [{binary_to_existing_atom(binary:part(Pattern, Start+1, Len-2), latin1), {Start, Len}}
-                    || [{Start, Len}] <- Match]};
-        nomatch ->
-            {Pattern, []}
-    end.
-
-fill_pattern({Pattern, []}, _) ->
-    Pattern;
-fill_pattern({Pattern, Vars}, Values) ->
-    maps:fold(
-        fun(Var, Val, Patt) ->
-            case proplists:get_value(Var, Vars, undefined) of
-                {Start, Len} ->
-                    <<Prefix:Start/binary, _:Len/binary, Suffix/binary>> = Patt,
-                    <<Prefix/binary, Val/binary, Suffix/binary>>;
-                undefined ->
-                    Patt
-            end
-        end, Pattern, Values).
-
-prepare_matching(undefined) ->
-    undefined;
-prepare_matching(Pattern) ->
-    EPattern = binary:replace(Pattern, <<".">>, <<"\\">>, [global, {insert_replaced, 1}]),
-    case re:run(EPattern, "{[^}]+}", [global]) of
-        {match, Match} ->
-            Regex = lists:foldr(
-                fun([{Start, Len}], Patt) ->
-                    <<Prefix:Start/binary, _:Len/binary, Suffix/binary>> = Patt,
-                    <<Prefix/binary, "([a-zA-z0-9]*)", Suffix/binary>>
-                end, EPattern, Match),
-            {ok, MP} = re:compile(<<"^", Regex/binary, "$">>),
-            {MP, [binary_to_existing_atom(binary:part(EPattern, Start+1, Len-2), latin1) || [{Start, Len}] <- Match]};
-        nomatch ->
-            {Pattern, []}
-    end.
-
-match_pattern(Topic, {Pattern, Vars}) ->
-    case re:run(Topic, Pattern, [global, {capture, all, binary}]) of
-        {match, [[_Head | Matches]]} ->
-            maps:from_list(lists:zip(Vars, Matches));
-        nomatch ->
-            undefined
-    end.
-
-match_vars(Topic, Pattern) ->
-    case match_pattern(Topic, Pattern) of
-        undefined ->
-            lager:error("Topic ~w does not match pattern ~w", [Topic, Pattern]),
-            #{};
-        Vars ->
-            lorawan_admin:parse(Vars)
-    end.
 
 % Shared Access Signature functions
 % see https://docs.microsoft.com/en-us/azure/storage/storage-dotnet-shared-access-signature-part-1
@@ -277,23 +225,5 @@ build_access_token(Res0, AccessKey, Expiry) ->
     Sig = http_uri:encode(base64:encode_to_string(
         crypto:hmac(sha256, base64:decode(AccessKey), ToSign))),
     io_lib:format("SharedAccessSignature sr=~s&sig=~s&se=~B", [Res, Sig, Now+Expiry]).
-
--include_lib("eunit/include/eunit.hrl").
-
-matchtst(undefined = Vars, Pattern, Topic) ->
-    [?_assertEqual(Vars, match_pattern(Topic, prepare_matching(Pattern))),
-    ?_assertEqual(Pattern, fill_pattern(prepare_filling(Pattern), Vars))];
-matchtst(Vars, Pattern, Topic) ->
-    [?_assertEqual(Vars, match_pattern(Topic, prepare_matching(Pattern))),
-    ?_assertEqual(Topic, fill_pattern(prepare_filling(Pattern), Vars))].
-
-pattern_test_()-> [
-    matchtst(#{}, <<"normal/uri">>, <<"normal/uri">>),
-    matchtst(undefined, <<"normal/uri">>, <<"another/uri">>),
-    matchtst(#{devaddr => <<"00112233">>}, <<"{devaddr}">>, <<"00112233">>),
-    matchtst(#{devaddr => <<"00112233">>}, <<"prefix.{devaddr}">>, <<"prefix.00112233">>),
-    matchtst(#{devaddr => <<"00112233">>}, <<"{devaddr}/suffix">>, <<"00112233/suffix">>),
-    matchtst(#{devaddr => <<"00112233">>}, <<"prefix:{devaddr}:suffix">>, <<"prefix:00112233:suffix">>),
-    matchtst(#{group => <<"test">>, devaddr => <<"00112233">>}, <<"{group}-{devaddr}">>, <<"test-00112233">>)].
 
 % end of file

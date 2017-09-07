@@ -10,26 +10,36 @@
 -include_lib("lorawan_server_api/include/lorawan_application.hrl").
 
 handle(RxQ, Link, FOpts, RxFrame) ->
-    % process incoming commands
     FOptsIn = parse_fopts(FOpts),
     case FOptsIn of
         [] -> ok;
-        List1 -> lager:debug("~w -> ~w", [Link#link.devaddr, List1])
+        List1 -> lager:debug("~s -> ~w", [lorawan_mac:binary_to_hex(Link#link.devaddr), List1])
     end,
+    % process incoming responses
     {MacConfirm, Link2} = handle_rxwin(FOptsIn,
         handle_adr(FOptsIn,
         handle_status(FOptsIn, Link))),
     {Link3, RxFrame2} = auto_adr(RxQ, Link2, RxFrame),
-    % check for new commands
-    {ok, MacConfirm, Link3, build_fopts(Link3), RxFrame2}.
+    % process requests
+    FOptsOut =
+        lists:foldl(
+            fun (link_check_req, Acc) -> [send_link_check(RxQ) | Acc];
+                (_Else, Acc) -> Acc
+            end,
+            [], FOptsIn),
+    % check for new requests
+    {ok, MacConfirm, Link3, build_fopts(Link3, FOptsOut), RxFrame2}.
 
 build_fopts(Link) ->
+    build_fopts(Link, []).
+
+build_fopts(Link, FOptsOut0) ->
     FOptsOut = send_adr(Link,
         set_rxwin(Link,
-        request_status(Link, []))),
+        request_status(Link, FOptsOut0))),
     case FOptsOut of
         [] -> ok;
-        List2 -> lager:debug("~w <- ~w", [Link#link.devaddr, List2])
+        List2 -> lager:debug("~s <- ~w", [lorawan_mac:binary_to_hex(Link#link.devaddr), List2])
     end,
     encode_fopts(FOptsOut).
 
@@ -51,7 +61,7 @@ parse_fopts(<<16#08, Rest/binary>>) ->
 parse_fopts(<<>>) ->
     [];
 parse_fopts(Unknown) ->
-    lager:warning("Unknown command ~w", [Unknown]),
+    lager:warning("Unknown command ~p", [Unknown]),
     [].
 
 encode_fopts([{link_check_ans, Margin, GwCnt} | Rest]) ->
@@ -75,7 +85,7 @@ encode_fopts([]) ->
 handle_adr(FOptsIn, Link) ->
     case find_adr(FOptsIn) of
         {1, 1, 1} ->
-            lager:debug("LinkADRReq ~w succeeded", [Link#link.devaddr]),
+            lager:debug("LinkADRReq ~s succeeded", [lorawan_mac:binary_to_hex(Link#link.devaddr)]),
             Link#link{adr_use=Link#link.adr_set, devstat_fcnt=undefined, last_qs=[]};
         {PowerACK, DataRateACK, ChannelMaskACK} ->
             lorawan_utils:throw_warning({node, Link#link.devaddr}, {adr_req_failed, {PowerACK, DataRateACK, ChannelMaskACK}}),
@@ -102,7 +112,7 @@ find_adr(FOptsIn) ->
 handle_rxwin(FOptsIn, Link) ->
     case find_rxwin(FOptsIn) of
         {1, 1, 1} ->
-            lager:debug("RXParamSetupAns ~w succeeded", [Link#link.devaddr]),
+            lager:debug("RXParamSetupAns ~s succeeded", [lorawan_mac:binary_to_hex(Link#link.devaddr)]),
             {RX1DROffset, _, _} = Link#link.rxwin_set,
             {_, RX2DataRate, Frequency} = lorawan_mac_region:default_rxwin(Link#link.region),
             {true, Link#link{rxwin_use={RX1DROffset, RX2DataRate, Frequency},
@@ -141,8 +151,14 @@ find_status(FOptsIn) ->
         end,
         undefined, FOptsIn).
 
+send_link_check(#rxq{datr=DataRate, lsnr=SNR}) ->
+    {SF, _} = lorawan_mac_region:datar_to_tuple(DataRate),
+    Margin = trunc(SNR - max_snr(SF)),
+    lager:debug("LinkCheckAns: margin: ~B", [Margin]),
+    {link_check_ans, Margin, 1}.
 
-auto_adr(RxQ, #link{adr_flag_set=1}=Link, RxFrame) ->
+
+auto_adr(RxQ, #link{adr_flag_use=1, adr_flag_set=1}=Link, RxFrame) ->
     % ADR is ON, so maintain quality statistics
     LastQs = appendq({RxQ#rxq.rssi, RxQ#rxq.lsnr}, Link#link.last_qs),
     auto_adr0(Link#link{last_qs=LastQs}, RxFrame);
@@ -165,24 +181,28 @@ auto_adr0(#link{last_qs=LastQs}=Link, RxFrame) when length(LastQs) >= 20 ->
     MaxSNR = max_snr(Link#link.region, DataRate)+10,
     StepsDR = trunc((AvgSNR-MaxSNR)/3),
     DataRate2 = if
+            DataRate == undefined ->
+                DataRate;
             StepsDR > 0, DataRate < MaxDR ->
-                lager:debug("DataRate ~w: average snr ~w ~w = ~w, dr ~w -> step ~w",
-                    [Link#link.devaddr, round(AvgSNR), MaxSNR, round(AvgSNR-MaxSNR), DataRate, StepsDR]),
+                lager:debug("DataRate ~s: average snr ~w ~w = ~w, dr ~w -> step ~w",
+                    [lorawan_mac:binary_to_hex(Link#link.devaddr), round(AvgSNR), MaxSNR, round(AvgSNR-MaxSNR), DataRate, StepsDR]),
                 min(DataRate+StepsDR, MaxDR);
             true ->
                 DataRate
         end,
     % receiver sensitivity for maximal DR in all regions is -120 dBm, we try to stay at -100 dBm
     TxPower2 = if
+            TxPower == undefined ->
+                TxPower;
             AvgRSSI > -96, TxPower < MinPower ->
                 PwrStepUp = trunc((AvgRSSI+100)/4), % 2-3dB between levels, go slower
-                lager:debug("Power ~w: average rssi ~w, power ~w -> up by ~w",
-                    [Link#link.devaddr, round(AvgRSSI), TxPower, PwrStepUp]),
+                lager:debug("Power ~s: average rssi ~w, power ~w -> up by ~w",
+                    [lorawan_mac:binary_to_hex(Link#link.devaddr), round(AvgRSSI), TxPower, PwrStepUp]),
                 min(MinPower, TxPower+PwrStepUp);
             AvgRSSI < -102, TxPower > DefPower ->
                 PwrStepDown = trunc((AvgRSSI+98)/2), % go faster
-                lager:debug("Power ~w: average rssi ~w, power ~w -> down by ~w",
-                    [Link#link.devaddr, round(AvgRSSI), TxPower, PwrStepDown]),
+                lager:debug("Power ~s: average rssi ~w, power ~w -> down by ~w",
+                    [lorawan_mac:binary_to_hex(Link#link.devaddr), round(AvgRSSI), TxPower, PwrStepDown]),
                 max(DefPower, TxPower+PwrStepDown); % steps are negative
             true ->
                 TxPower
@@ -200,9 +220,12 @@ average0(List) ->
     Sigma = math:sqrt(lists:sum([(N-Avg)*(N-Avg) || N <- List])/length(List)),
     Avg-Sigma.
 
-% from SX1272 DataSheet, Table 13
 max_snr(Region, DataRate) ->
     {SF, _} = lorawan_mac_region:dr_to_tuple(Region, DataRate),
+    max_snr(SF).
+
+% from SX1272 DataSheet, Table 13
+max_snr(SF) ->
     -5-2.5*(SF-6). % dB
 
 send_adr(Link, FOptsOut) ->
@@ -218,7 +241,7 @@ send_adr(Link, FOptsOut) ->
     end.
 
 set_channels(Region, {TXPower, DataRate, Chans}, FOptsOut)
-        when Region == <<"EU863-870">>; Region == <<"CN779-787">>; Region == <<"EU433">>; Region == <<"KR920-923">> ->
+        when Region == <<"EU863-870">>; Region == <<"CN779-787">>; Region == <<"EU433">>; Region == <<"KR920-923">>; Region == <<"AS923-JP">> ->
     [{link_adr_req, DataRate, TXPower, build_bin(Chans, {0, 15}), 0, 0} | FOptsOut];
 set_channels(Region, {TXPower, DataRate, Chans}, FOptsOut)
         when Region == <<"US902-928">>; Region == <<"US902-928-PR">>; Region == <<"AU915-928">> ->
@@ -257,7 +280,9 @@ set_rxwin(Link, FOptsOut) ->
         _Else2 -> undefined
     end,
     if
-         OffSet /= undefined, OffSet /= OffUse ->
+        Link#link.adr_flag_use == 1,
+        (Link#link.adr_flag_set == 1 orelse Link#link.adr_flag_set == 2),
+        OffSet /= undefined, OffSet /= OffUse ->
             {_, RX2DataRate, Frequency} = lorawan_mac_region:default_rxwin(Link#link.region),
             lager:debug("RXParamSetupReq ~w", [OffSet]),
             [{rx_param_setup_req, OffSet, RX2DataRate, trunc(10000*Frequency)} | FOptsOut];

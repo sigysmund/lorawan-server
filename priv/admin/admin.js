@@ -3,10 +3,13 @@
  * All rights reserved.
  * Distributed under the terms of the MIT License. See the LICENSE file.
  */
-var myApp = angular.module('myApp', ['ng-admin', 'uiGmapgoogle-maps', 'googlechart']);
+var myApp = angular.module('myApp', ['ng-admin', 'colorpicker.module', 'uiGmapgoogle-maps', 'googlechart']);
 myApp.config(['NgAdminConfigurationProvider', function (nga) {
     var admin = nga.application('Server Admin').baseApiUrl('/');
 
+    var servers = nga.entity('servers')
+        .identifier(nga.field('node'))
+        .readOnly();
     var applications = nga.entity('applications')
         .identifier(nga.field('name'));
     var users = nga.entity('users')
@@ -32,6 +35,10 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         .identifier(nga.field('appid'));
     var events = nga.entity('events')
         .identifier(nga.field('evid'));
+
+    role_choices = [
+        { value: 'admin', label: 'admin' }
+    ];
 
     adr_choices = [
         { value: 0, label: 'OFF' },
@@ -60,17 +67,19 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         { value: 'EU433', label: 'EU 433MHz' },
         { value: 'AU915-928', label: 'Australia 915-928MHz' },
         { value: 'CN470-510', label: 'China 470-510MHz' },
-        { value: 'KR920-923', label: 'South Korea 920-923MHz' }
+        { value: 'KR920-923', label: 'South Korea 920-923MHz' },
+        { value: 'AS923-JP', label: 'Japan 920.6-923.4MHz' }
     ];
 
     data_rate_choices = [
-        { value: 0, label: 'SF12 125 kHz (250 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923'] },
-        { value: 1, label: 'SF11 125 kHz (440 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923'] },
-        { value: 2, label: 'SF10 125 kHz (980 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923'] },
-        { value: 3, label: 'SF9 125 kHz (1760 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923'] },
-        { value: 4, label: 'SF8 125 kHz (3125 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923'] },
-        { value: 5, label: 'SF7 125 kHz (5470 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923'] },
+        { value: 0, label: 'SF12 125 kHz (250 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923', 'AS923-JP'] },
+        { value: 1, label: 'SF11 125 kHz (440 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923', 'AS923-JP'] },
+        { value: 2, label: 'SF10 125 kHz (980 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923', 'AS923-JP'] },
+        { value: 3, label: 'SF9 125 kHz (1760 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923', 'AS923-JP'] },
+        { value: 4, label: 'SF8 125 kHz (3125 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923', 'AS923-JP'] },
+        { value: 5, label: 'SF7 125 kHz (5470 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433', 'CN470-510', 'KR920-923', 'AS923-JP'] },
         { value: 6, label: 'SF7 250 kHz (11000 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433'] },
+        { value: 7, label: '50 kbps (50000 bit/s)', regions: ['EU863-870', 'CN779-787', 'EU433'] },
 
         { value: 0, label: 'SF10 125 kHz (980 bit/s)', regions: ['US902-928', 'US902-928-PR', 'AU915-928'] },
         { value: 1, label: 'SF9 125 kHz (1760 bit/s)', regions: ['US902-928', 'US902-928-PR', 'AU915-928'] },
@@ -121,7 +130,15 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         { value: 3, label: '8 dBm', regions: ['KR920-923'] },
         { value: 4, label: '5 dBm', regions: ['KR920-923'] },
         { value: 5, label: '2 dBm', regions: ['KR920-923'] },
-        { value: 6, label: '0 dBm', regions: ['KR920-923'] }
+        { value: 6, label: '0 dBm', regions: ['KR920-923'] },
+
+        { value: 0, label: '13 dBm', regions: ['AS923-JP'] },
+        { value: 1, label: '12 dBm', regions: ['AS923-JP'] },
+        { value: 2, label: '10 dBm', regions: ['AS923-JP'] },
+        { value: 3, label: '8 dBm', regions: ['AS923-JP'] },
+        { value: 4, label: '6 dBm', regions: ['AS923-JP'] },
+        { value: 5, label: '4 dBm', regions: ['AS923-JP'] },
+        { value: 6, label: '0 dBm', regions: ['AS923-JP'] }
     ];
 
     format_choices = [
@@ -130,13 +147,31 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         { value: 'www-form', label: 'Web Form' }
     ];
 
+    // ---- servers
+    servers.listView().fields([
+        nga.field('node'),
+        nga.field('modules.lorawan_server').label('Version'),
+        nga.field('memory').label('Free Memory')
+            .map(map_memstats),
+        nga.field('disk').label('Free Disk')
+            .map(map_diskstats),
+        nga.field('alarms', 'choices')
+    ])
+    .batchActions([]);
+    // add to the admin application
+    admin.addEntity(servers);
+
     // ---- users
     users.listView().fields([
-        nga.field('name').isDetailLink(true)
+        nga.field('name').isDetailLink(true),
+        nga.field('roles', 'choices').label('Roles')
+            .choices(role_choices)
     ]);
     users.creationView().fields([
         nga.field('name'),
-        nga.field('pass', 'password')
+        nga.field('pass', 'password'),
+        nga.field('roles', 'choices').label('Roles')
+            .choices(role_choices)
     ]);
     users.editionView().fields(users.creationView().fields());
     // add to the admin application
@@ -153,7 +188,7 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('last_rx', 'datetime').label('Last RX'),
         nga.field('alive', 'boolean').label('Alive')
             .map(function timediff(value, entry) {
-                return timeyoung(entry.last_rx, 60);
+                return timeyoung(entry.last_rx, 60*1000);
             })
     ])
     .sortField('mac')
@@ -184,14 +219,25 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             .attributes({ placeholder: 'e.g. 6' }),
         nga.field('group'),
         nga.field('desc').label('Description'),
-        nga.field('last_rx', 'datetime').label('Last RX'),
         nga.field('gpspos', 'template')
             .validation({required: true })
             .label('Location')
             .template('<map location="value"></map>'),
-        nga.field('gpsalt', 'number').label('Altitude')
+        nga.field('gpsalt', 'number').label('Altitude'),
+        nga.field('last_rx', 'datetime').label('Last RX'),
+        nga.field('mac', 'template').label('Delays')
+            .template('<pgraph value="value"></pgraph>'),
+        nga.field('mac', 'template').label('Transmissions')
+            .template('<tgraph value="value"></tgraph>')
     ]);
+    gateways.creationView().template(createWithTabsTemplate([
+        {name:"General", min:0, max:10}
+    ]));
     gateways.editionView().fields(gateways.creationView().fields());
+    gateways.editionView().template(editWithTabsTemplate([
+        {name:"General", min:0, max:10},
+        {name:"Status", min:10, max:13}
+    ]));
     // add to the admin application
     admin.addEntity(gateways);
 
@@ -252,6 +298,7 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
     .sortField('deveui')
     .sortDir('ASC');
     devices.listView().filters([
+        nga.field('deveui').label('DevEUI'),
         nga.field('app').label('Application'),
         nga.field('appid').label('Group')
     ]);
@@ -271,7 +318,7 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('appargs').label('Arguments'),
         nga.field('appeui').label('AppEUI')
             .attributes({ placeholder: 'e.g. 0123456789ABCDEF' })
-            .validation({ required: true, pattern: '[A-Fa-f0-9]{16}' }),
+            .validation({ pattern: '[A-Fa-f0-9]{16}' }),
         nga.field('appkey').label('AppKey')
             .attributes({ placeholder: 'e.g. FEDCBA9876543210FEDCBA9876543210' })
             .validation({ required: true, pattern: '[A-Fa-f0-9]{32}' }),
@@ -333,12 +380,13 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('fcntup', 'number').label('FCnt Up'),
         nga.field('fcntdown', 'number').label('FCnt Down'),
         nga.field('devstat.battery', 'number').label('Battery'),
-        nga.field('devstat.margin', 'number').label('SNR (dB)'),
+        nga.field('devstat.margin', 'number').label('D/L SNR (dB)'),
         nga.field('last_rx', 'datetime').label('Last RX')
     ])
     .sortField('devaddr')
     .sortDir('ASC');
     nodes.listView().filters([
+        nga.field('devaddr').label('DevAddr'),
         nga.field('app').label('Application'),
         nga.field('appid').label('Group')
     ]);
@@ -491,7 +539,7 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('request_devstat', 'boolean').label('Request Status?')
             .defaultValue(true),
         nga.field('devstat.battery', 'number').label('Battery'),
-        nga.field('devstat.margin', 'number').label('SNR (dB)'),
+        nga.field('devstat.margin', 'number').label('D/L SNR (dB)'),
         nga.field('devstat_time', 'datetime').label('Status Time'),
         nga.field('devstat_fcnt', 'number').label('Status FCnt'),
         nga.field('devaddr', 'template').label('Device Status')
@@ -539,8 +587,9 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             .targetField(nga.field('devaddr')),
         nga.field('app').label('Application'),
         nga.field('appid').label('Group'),
-        nga.field('rxq.lsnr').label('SNR'),
+        nga.field('rxq.lsnr').label('U/L SNR'),
         nga.field('fcnt', 'number').label('FCnt'),
+        nga.field('confirm', 'boolean'),
         nga.field('port', 'number'),
         nga.field('data')
             .template(function(entry){
@@ -566,7 +615,7 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('uri').label('URI'),
         nga.field('published').label('Published Topic'),
         nga.field('subscribe').label('Subscribe'),
-        nga.field('consumed').label('Consumed Topic')
+        nga.field('consumed').label('Received Topic')
     ]);
     connectors.creationView().fields([
         nga.field('connid').label('Connector Name')
@@ -575,10 +624,10 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             .validation({ required: true }),
         nga.field('uri').label('URI')
             .attributes({ placeholder: 'e.g. mqtt://server:8883' })
-            .validation({ required: true, pattern: '^(mqtt)s?:\/\/[^\/?#]+[^?#]*' }),
+            .validation({ required: true, pattern: '^(http|mqtt)s?:\/\/[^\/?#]+[^?#]*' }),
         nga.field('published').label('Published Topic'),
         nga.field('subscribe').label('Subscribe'),
-        nga.field('consumed').label('Consumed Topic'),
+        nga.field('consumed').label('Received Topic'),
         nga.field('client_id').label('Client ID'),
         nga.field('auth', 'choice')
             .choices([
@@ -694,6 +743,17 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
 
     // ---- dashboard
     admin.dashboard(nga.dashboard()
+        .addCollection(nga.collection(servers)
+            .fields([
+                nga.field('node'),
+                nga.field('modules.lorawan_server').label('Version'),
+                nga.field('memory').label('Free Memory')
+                    .map(map_memstats),
+                nga.field('disk').label('Free Disk')
+                    .map(map_diskstats),
+                nga.field('alarms', 'choices')
+            ])
+        )
         .addCollection(nga.collection(gateways)
             .fields([
                 nga.field('mac').label('MAC').isDetailLink(true),
@@ -703,10 +763,29 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
                 nga.field('last_rx', 'datetime').label('Last RX'),
                 nga.field('alive', 'boolean').label('Alive')
                     .map(function timediff(value, entry) {
-                        return timeyoung(entry.last_rx, 60);
+                        return timeyoung(entry.last_rx, 60*1000);
                     })
             ])
             .sortField('mac')
+            .sortDir('ASC')
+            .perPage(7)
+        )
+        .addCollection(nga.collection(devices)
+            .fields([
+                nga.field('deveui').label('DevEUI').isDetailLink(true),
+                nga.field('last_join', 'datetime').label('Last Join')
+            ])
+            .sortField('deveui')
+            .sortDir('ASC')
+            .perPage(7)
+        )
+        .addCollection(nga.collection(nodes)
+            .fields([
+                nga.field('devaddr').label('DevAddr').isDetailLink(true),
+                nga.field('devstat.battery', 'number').label('Battery'),
+                nga.field('last_rx', 'datetime').label('Last RX')
+            ])
+            .sortField('devaddr')
             .sortDir('ASC')
             .perPage(7)
         )
@@ -726,15 +805,6 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             .sortField('last_rx')
             .perPage(7)
         )
-        .addCollection(nga.collection(devices)
-            .fields([
-                nga.field('deveui').label('DevEUI').isDetailLink(true),
-                nga.field('last_join', 'datetime').label('Last Join')
-            ])
-            .sortField('deveui')
-            .sortDir('ASC')
-            .perPage(7)
-        )
         .addCollection(nga.collection(rxframes).title('Received Frames')
             .fields([
                 nga.field('datetime', 'datetime').label('Received'),
@@ -744,31 +814,71 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
                 nga.field('devaddr', 'reference').label('DevAddr')
                     .targetEntity(nodes)
                     .targetField(nga.field('devaddr')),
-                nga.field('rxq.lsnr').label('SNR')
+                nga.field('rxq.lsnr').label('U/L SNR')
             ])
             .sortField('datetime')
             .perPage(7)
         )
-        .addCollection(nga.collection(nodes)
-            .fields([
-                nga.field('devaddr').label('DevAddr').isDetailLink(true),
-                nga.field('devstat.battery', 'number').label('Battery'),
-                nga.field('last_rx', 'datetime').label('Last RX')
-            ])
-            .sortField('devaddr')
-            .sortDir('ASC')
-            .perPage(7)
-        )
+        .template(`
+<div class="row">
+    <div class="col-lg-12">
+        <div class="page-header">
+            <h1>Dashboard</h1>
+        </div>
+    </div>
+</div>
+<div class="row dashboard-content">
+    <div class="col-lg-12">
+        <div class="panel panel-default" ng-repeat="name in ['servers']">
+            <ma-dashboard-panel collection="dashboardController.collections[name]" entries="dashboardController.entries[name]"
+                datastore="dashboardController.datastore"></ma-dashboard-panel>
+        </div>
+    </div>
+</div>
+<div class="row dashboard-content">
+    <div class="col-lg-6">
+        <div class="panel panel-default" ng-repeat="name in ['gateways', 'devices', 'nodes']">
+            <ma-dashboard-panel collection="dashboardController.collections[name]" entries="dashboardController.entries[name]"
+                datastore="dashboardController.datastore"></ma-dashboard-panel>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="panel panel-default" ng-repeat="name in ['events', 'rxframes']">
+            <ma-dashboard-panel collection="dashboardController.collections[name]" entries="dashboardController.entries[name]"
+                datastore="dashboardController.datastore"></ma-dashboard-panel>
+        </div>
+    </div>
+</div>
+        `)
     );
 
     // attach the admin application to the DOM and execute it
     nga.configure(admin);
 }]);
 
-function timeyoung(value, deltas) {
+function map_memstats(value, entry) {
+    var free = 100 * entry['memory.free_memory'] / entry['memory.total_memory'];
+    return (free.toFixed(1) + "% of " + bytesToSize(entry['memory.total_memory']));
+}
+
+function map_diskstats(value, entry) {
+    var root = entry['disk'].filter(function(obj) {
+        return (obj.id === "/");
+    });
+    return ((100-root[0].percent_used) + "% of " + bytesToSize(1024*root[0].size_kb));
+}
+
+function bytesToSize(bytes) {
+   var sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+   if (bytes == 0) return '0 Byte';
+   var i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
+   return Math.round(bytes / Math.pow(1024, i), 2) + ' ' + sizes[i];
+}
+
+function timeyoung(value, delta_ms) {
     var x1 = new Date();
     var x2 = new Date(value);
-    return x1.getTime() - x2.getTime() < deltas*1000;
+    return x1.getTime() - x2.getTime() < delta_ms;
 }
 
 function hextoascii(val) {
@@ -926,6 +1036,103 @@ myApp.config(function (uiGmapGoogleMapApiProvider) {
     });
 });
 
+myApp.directive('pgraph', ['$http', '$interval', function($http, $interval) {
+return {
+    restrict: 'E',
+    scope: {
+        value: '=',
+    },
+    link: function($scope) {
+            function updateData() {
+                $http({method: 'GET', url: '/pgraph/'.concat($scope.value)})
+                    .then(function(response) {
+                        $scope.prChartObject.data = response.data.array;
+                    });
+            }
+            $scope.prChartObject = {};
+            $scope.prChartObject.type = "LineChart";
+            $scope.prChartObject.options = {
+                "vAxes": {
+                    0: {"title": 'Delay [ms]', "minValue": 0, "maxValue": 1500},
+                },
+                "series": {
+                    0: {"targetAxisIndex": 0},
+                    1: {"targetAxisIndex": 0}
+                },
+                "chartArea": {
+                    "top": 0, "bottom": "10%",
+                    "left": 0, "right": 0
+                },
+                "legend": {
+                    "position": "none"
+                },
+                "pointSize": 3,
+                "hAxis": {
+                    "format": 'kk:mm'
+                },
+                "vAxis": {
+                    "textPosition": "in",
+                    "gridlines": {"count": -1}
+                }
+            };
+            updateData();
+            $scope.stopTime = $interval(updateData, 5000);
+            $scope.$on('$destroy', function() {
+                $interval.cancel($scope.stopTime);
+            });
+    },
+    template: '<div google-chart chart="prChartObject"></div>'
+};}]);
+
+myApp.directive('tgraph', ['$http', '$interval', function($http, $interval) {
+return {
+    restrict: 'E',
+    scope: {
+        value: '=',
+    },
+    link: function($scope) {
+            function updateData() {
+                $http({method: 'GET', url: '/tgraph/'.concat($scope.value)})
+                    .then(function(response) {
+                        $scope.txChartObject.data = response.data.array;
+                    });
+            }
+            $scope.txChartObject = {};
+            $scope.txChartObject.type = "LineChart";
+            $scope.txChartObject.options = {
+                "vAxes": {
+                    0: {"title": 'Tx Time [ms]', "minValue": 0, "maxValue": 5000},
+                    1: {"title": 'Tx in Hour [ms]', "minValue": 0, "maxValue": 1}
+                },
+                "series": {
+                    0: {"targetAxisIndex": 0},
+                    1: {"targetAxisIndex": 1}
+                },
+                "chartArea": {
+                    "top": 0, "bottom": "10%",
+                    "left": 0, "right": 0
+                },
+                "legend": {
+                    "position": "none"
+                },
+                "pointSize": 3,
+                "hAxis": {
+                    "format": 'kk:mm'
+                },
+                "vAxis": {
+                    "textPosition": "in",
+                    "gridlines": {"count": -1}
+                }
+            };
+            updateData();
+            $scope.stopTime = $interval(updateData, 5000);
+            $scope.$on('$destroy', function() {
+                $interval.cancel($scope.stopTime);
+            });
+    },
+    template: '<div google-chart chart="txChartObject"></div>'
+};}]);
+
 myApp.directive('rgraph', ['$http', '$interval', function($http, $interval) {
 return {
     restrict: 'E',
@@ -996,7 +1203,7 @@ return {
             $scope.rxqChartObject.options = {
                 "vAxes": {
                     0: {"title": 'RSSI (dBm)'},
-                    1: {"title": 'SNR (dB)'}
+                    1: {"title": 'U/L SNR (dB)'}
                 },
                 "series": {
                     0: {"targetAxisIndex": 0, "pointsVisible": false},
@@ -1047,7 +1254,7 @@ return {
             $scope.rxdChartObject.options = {
                 "vAxes": {
                     0: {"title": 'Battery'},
-                    1: {"title": 'SNR (dB)'}
+                    1: {"title": 'D/L SNR (dB)'}
                 },
                 "series": {
                     0: {"targetAxisIndex": 0},

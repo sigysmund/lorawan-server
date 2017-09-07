@@ -2,6 +2,8 @@
 
 You can administrate and manage the server via a set of web-pages or via a REST API.
 By default, the server listens on HTTP port 8080 and expects "admin" as both username and password.
+You can access it via a web browser by entering the URL `http://server:8080`, where
+`server` is the IP or the hostname of your server.
 
 The port and default credentials (which are set when the server database is created)
 can be changed in the [`sys.config`](../lorawan_server.config). The credentials can
@@ -44,6 +46,7 @@ The following REST resources are made available:
 
   Resource                  | Methods          | Explanation
  ---------------------------|------------------| ------------------------------------------------
+  /servers                  | GET              | Server status information
   /applications             | GET              | Supported LoRaWAN applications
   /users                    | GET, POST        | Users of the admin interface
   /users/*ABC*              | GET, PUT, DELETE | User *ABC*
@@ -51,12 +54,12 @@ The following REST resources are made available:
   /gateways/*123*           | GET, PUT, DELETE | Gateway with MAC=*123*
   /multicast_channels       | GET, POST        | Class C multicast channels
   /multicast_channels/*123* | GET, PUT, DELETE | Multicast channel with DevAddr=*123*
-  /ignored_nodes            | GET, POST        | Nodes ignored by the server
-  /ignored_nodes/*123*      | GET, PUT, DELETE | Ignored node with DevAddr=*123*
   /devices                  | GET, POST        | Devices registered for over-the-air activation (OTAA)
   /devices/*123*            | GET, PUT, DELETE | Device with DevEUI=*123*
   /nodes                    | GET, POST        | Active network nodes, both ABP and activated OTAA
   /nodes/*123*              | GET, PUT, DELETE | Active network node with DevAddr=*123*
+  /ignored_nodes            | GET, POST        | Nodes ignored by the server
+  /ignored_nodes/*123*      | GET, PUT, DELETE | Ignored node with DevAddr=*123*
   /txframes                 | GET              | Frames scheduled for transmission
   /txframes/*123*           | GET, DELETE      | Frame with ID=*123*
   /rxframes                 | GET              | Recent received frames
@@ -65,6 +68,7 @@ The following REST resources are made available:
   /connectors               | GET              | Backend connectors
   /connectors/*ABC*         | GET, DELETE      | Backend connector *ABC*
   /events                   | GET              | Recent errors and warnings
+  /upload                   | PUT              | Uploads (certificate) files to the server
 
 There is a 1:1 mapping between the REST API and the Web Admin. Parameters
 that are in the Web Admin indicated as optional doesn't need to be provided in

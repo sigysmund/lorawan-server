@@ -26,7 +26,7 @@ If your Linux distribution includes some older version of Erlang/OTP, try instal
 an update from [Erlang Solutions](https://www.erlang-solutions.com/resources/download.html).
 
 Then download the latest binary release
-[lorawan-server-<VERSION>.tar.gz](https://github.com/gotthardp/lorawan-server/releases)
+[lorawan-server-*.tar.gz](https://github.com/gotthardp/lorawan-server/releases)
 and (on Linux) unpack it by:
 ```bash
 mkdir lorawan-server
@@ -59,17 +59,32 @@ This will put the database and the logs into `/var/lib/lorawan-server`.
 Install the [32-bit or 64-bit Binary File](http://www.erlang.org/downloads) of
 Erlang/OTP 19 or later.
 
-Unpack the release using the [7-Zip](http://www.7-zip.org) and run the server by
-```bash
-bin/lorawan-server.bat
-```
+Unpack the binary release
+[lorawan-server-*.tar.gz](https://github.com/gotthardp/lorawan-server/releases)
+using the [7-Zip](http://www.7-zip.org) to a new folder
+(e.g. `lorawan-server`) and then run the server by double-clicking `lorawan-server.bat`
+in the `lorawan-server/bin` folder.
 
 You can also run the lorawan-server as a Windows service.
-The service is managed using `bin/lorawan-service.bat` *command*, where:
- * *add* will add the service. Once added you can use the standard Windows control
+The service can be managed from a Command Prompt (`cmd`) using
+`lorawan-service.bat <command>`, where the `<command>` could be:
+ * *add* to add the service. Once added you can use the standard Windows control
    panel administrative tools to start/stop or enable/disable the service.
- * *remove* will remove the previously added service.
- * *list* will display parameters of a previously added service.
+ * *remove* to remove the previously added service.
+ * *list* to display parameters of a previously added service.
+
+### Using the Binary Release on Mac OS
+
+Install Erlang by `brew install erlang`.
+
+Unpack and run the binary release
+```bash
+mkdir lorawan-server
+mv lorawan-server-<VERSION>.tar.gz lorawan-server/
+cd lorawan-server
+tar -zxvf lorawan-server-<VERSION>.tar.gz
+bin/lorawan-server
+```
 
 
 ## Upgrade
@@ -103,6 +118,10 @@ To upgrade your server binaries:
 Review the `lorawan-server/releases/<VERSION>/sys.config` with the server configuration:
  * To enable/disable applications, modify the `plugins` section. For more details
    see the [Custom Application Guide](Applications.md).
+
+Note that during the manual installation the `sys.config` is created
+automatically by the release tool (`make release`) based on the
+[lorawan_server.config](/lorawan_server.config).
 
 For example:
 ```erlang
@@ -171,9 +190,11 @@ You will need the following prerequisites:
  * Rebar3, the Erlang build tool.
    * On Linux it will download automatically.
    * On Windows follow the [installation instructions](https://www.rebar3.org/docs/getting-started).
+   * On Mac OS, run `brew install rebar`.
  * npm, the JavaScript package manager.
    * On Linux, try typing `yum install npm` or `apt-get install npm`.
    * On Windows, install the [Node.js](https://nodejs.org/en/).
+   * On Mac OS, run `brew install node`.
 
 Get the latest sources by:
 ```bash

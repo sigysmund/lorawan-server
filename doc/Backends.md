@@ -58,7 +58,8 @@ end.
 ```
 
 Once you have the matched variables, you put them in a structure that gets encoded in JSON.
-The `#{name1 => A, name2 => B, name3 => C}` creates a JSON `{"name1":A, "name2":B, "name3":C}`.
+The `#{name1 => A, name2 => B, name3 => C}` creates a `fields` attribute with
+the JSON `{"name1":A, "name2":B, "name3":C}`.
 
 ### Build Downlink
 
@@ -77,9 +78,9 @@ fun(_Port, #{led := LED}) ->
 end.
 ```
 
-The `#{name1 := A, name2 := B, name3 := C}` matches a JSON structure
-`{"name1":A, "name2":B, "name3":C}`. The order is not significant, but all
-fields are mandatory.
+The `#{name1 := A, name2 := B, name3 := C}` matches the `fields` attribute containing
+a JSON structure `{"name1":A, "name2":B, "name3":C}`. The order is not significant,
+but all fields are mandatory.
 
 The binary is then built using similar approach as the pattern matching
 explained above. For example, `<<A, B, C>>` builds a binary of three 1-byte integers.
@@ -98,14 +99,18 @@ end.
 To create a new connector you set:
  * *Connector Name*
  * *Enabled* flag that allows you to temporarily disable an existing connector.
- * *URI* defines the target host either as `mqtt://host:port` or `mqtts://host:port`
-   if SSL shall be used.
+ * *URI* defines the target host, which can be
+   * For MQTT `mqtt://host:port` or `mqtts://host:port` if SSL shall be used
+   * For HTTP POST `http://host:port` or `https://host:port`
  * *Published Topic*, which is a server pattern for constructing the publication
-   topic, e.g. `out/{devaddr}`.
- * *Subscribe*, which is a topic to be subscribed, e.g. `in/#`. It may include
-   broker specific wilcards.
- * *Consumed Topic*, which is is a server pattern for parsing topics of consumed
-   messages, e.g. `in/{devaddr}`.
+   topic, e.g. `out/{devaddr}`. This can be used to include the actual DevEUI,
+   DevAddr or device Group in the message topic.
+ * *Subscribe*, which is a topic to be subscribed. It may include broker specific
+   wilcards, e.g. `in/#`. The MQTT broker will then send messages with a matching
+   topic to this connector.
+ * *Received Topic*, which is a template for parsing the topic of received
+   messages, e.g. `in/{devaddr}`. This can be used to obtain a DevEUI, DevAddr or
+   a device Group that shall receive a given downlink.
 
 On the Authentication tab:
  * *Client ID* is the MQTT parameter
@@ -115,11 +120,15 @@ On the Authentication tab:
  * *Name* and *Password/Key* for plain authentication
  * *User Certificate* and *Private Key* if SSL authentication is needed
 
-To include node-specific attributes the published and consumed topic may include
+To include node-specific attributes the Published and Received Topic may include
 following patterns:
  * `{deveui}` that matches the DevEUI of the node
  * `{devaddr}` that matches the DevAddr of the node
  * `{group}` that matches the node group
+
+The Received Topic may also include the `#` (hash), which matches zero or more
+characters, including any '/' delimiters. It can be used to ignore the leading
+or training characters in the topic.
 
 If the Connector is *Enabled* and a *Subscribe* topic is defined the server will
 automatically connect to the MQTT broker and subscribe this topic.
@@ -133,4 +142,4 @@ openssl rsa -in privkey.pem -out key.pem
 
 Please read the [Integration Guide](Integration.md) for detailed information on
 how to connect to a generic MQTT server like RabbitMQ or an IoT Platform like
-AWS IoT, IBM Watson IoT, Azure IoT Hub or Adafruit IO.
+AWS IoT, IBM Watson IoT, MathWorks ThingSpeak, Azure IoT Hub or Adafruit IO.

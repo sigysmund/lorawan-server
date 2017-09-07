@@ -34,12 +34,13 @@ This may be due to:
  * Firewall misconfiguration. Check the server firewall does not block the port 1680.
    See [Installation Instructions](Installation.md) for configuration guidelines.
 
-### No downlink frames sent
+### No downlink frames delivered
 
 This may be because:
  * Gateway configuration error. Verify you set correctly the *TX Chain* in your
    [Infrastructure](Infrastructure.md) configuration.
  * Gateway error. Check for any error in your gateway log file.
+ * The device and gateway are using inconsistent private/public network mode setting.
  * The device did not listen on the channel (frequency) used by the server. Verify
    your device correctly listens in the right RX1/RX2 window. The RX2 frequencies
    and data rates are provided in the
@@ -102,6 +103,13 @@ To allow ABP devices to freely reset set the *FCnt Check* to *Reset on zero*,
 but please note this weakens LoRaWAN security a bit.
 It is recommended to use over-the-air-activation (OTAA) instead.
 
+### repeated_reset
+
+No frames were received since last OTAA join or last ABP reset. This is just a
+warning. It may be because:
+ * No downlink frames delivered (see above)
+ * Faulty device is periodically re-starting
+
 ### prerequisite_failed
 
 This is reported when the lorawan-server is started with older Erlang/OTP. At
@@ -117,5 +125,24 @@ The server is configured to use a connector, which is disabled. Set the
 This is reported when a [Backend](Backends.md) connector doesn't know to what
 device a downlink shall be sent. You have two options:
  * Define a "devaddr" or "deveui" field in the JSON structure, or
- * Define the "Consumed Topic" as a template "in/{devaddr}", which causes the
+ * Define the "Received Topic" as a template "in/{devaddr}", which causes the
    server to parse the topic and extract the DevAddr from there.
+
+### Unknown element in JSON received from the Lorank8 gateway
+
+The problem is the Lorank8 proprietary message format. In your gateway config
+you likely have `stat_format` set to `idee_concise` or `idee_verbose`. You need
+to change `stat_format` to `semtech` to get this working.
+
+
+## Alarms
+
+Server alarms are indicated in the web-admin Dashboard.
+
+### system_memory_high_watermark
+
+This indicates that the system has less than 20% of free memory.
+
+### disk_almost_full
+
+This indicates there is less than 20% of free disk space.

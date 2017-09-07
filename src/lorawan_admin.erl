@@ -14,18 +14,23 @@
 handle_authorization(Req, State) ->
     case cowboy_req:parse_header(<<"authorization">>, Req) of
         {basic, User, Pass} ->
-            case user_password(User) of
-                Pass -> {true, Req, State};
-                _ -> {{false, <<"Basic realm=\"lorawan-server\"">>}, Req, State}
+            case authorized_password(<<"admin">>, User, Pass) of
+                true -> {true, Req, State};
+                false -> {{false, <<"Basic realm=\"lorawan-server\"">>}, Req, State}
             end;
         _ ->
             {{false, <<"Basic realm=\"lorawan-server\"">>}, Req, State}
     end.
 
-user_password(User) ->
+authorized_password(Role, User, Pass) ->
     case mnesia:dirty_read(users, User) of
-        [] -> undefined;
-        [U] -> U#user.pass
+        % temporary provisions for backward compatibility
+        [#user{pass=Pass, roles=undefined}] ->
+            true;
+        [#user{pass=Pass, roles=Roles}] ->
+            lists:member(Role, Roles);
+        _Else ->
+            false
     end.
 
 parse(Object) when is_map(Object) ->
@@ -62,6 +67,16 @@ parse(Key, Value) when Key == time ->
     iso8601:parse_exact(Value);
 parse(Key, Value) when Key == devstat ->
     parse_devstat(Value);
+parse(Key, Value) when Key == dwell ->
+    lists:map(
+        fun(#{time:=Time, freq:=Freq, duration:=Duration, hoursum:=Sum}) ->
+            {iso8601:parse_exact(Time), {Freq, Duration, Sum}}
+        end, Value);
+parse(Key, Value) when Key == delays ->
+    lists:map(
+        fun(#{date:=Date, srvdelay:=SDelay, nwkdelay:=NDelay}) ->
+            {iso8601:parse(Date), SDelay, NDelay}
+        end, Value);
 parse(Key, Value) when Key == last_qs ->
     lists:map(fun(Item) -> parse_qs(Item) end, Value);
 parse(Key, Value) when Key == average_qs ->
@@ -110,6 +125,14 @@ build(Key, Value) when Key == last_join; Key == last_reset; Key == datetime;
     iso8601:format(Value);
 build(Key, Value) when Key == devstat ->
     build_devstat(Value);
+build(Key, Value) when Key == dwell ->
+    lists:map(fun({Time, {Freq, Duration, Sum}}) ->
+                #{time=>iso8601:format(Time), freq=>Freq, duration=>Duration, hoursum=>Sum}
+              end, Value);
+build(Key, Value) when Key == delays ->
+    lists:map(fun({Date, SDelay, NDelay}) -> #{date=>iso8601:format(Date), srvdelay=>SDelay, nwkdelay=>NDelay};
+                ({Date, NDelay}) -> #{date=>iso8601:format(Date), srvdelay=>undefined, nwkdelay=>NDelay}
+              end, Value);
 build(Key, Value) when Key == last_qs ->
     lists:map(fun(Item) -> build_qs(Item) end, Value);
 build(Key, Value) when Key == average_qs ->

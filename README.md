@@ -5,6 +5,7 @@ This is useful for application providers that operate their own LoRa network,
 or for device and application developers.
 
 The server:
+ * Implements the LoRaWAN Specification v1.0.1
  * Communicates with (any number of) remote LoRaWAN gateways. It currently supports:
    * All gateways based on the [Packet Forwarder](https://github.com/Lora-net/packet_forwarder),
      such as the Semtech LoRa demo kit,
@@ -22,6 +23,7 @@ The server:
      including applications hosted in
      [Amazon AWS IoT](https://aws.amazon.com/iot/),
      [IBM Watson IoT Platform](https://www.ibm.com/cloud-computing/bluemix/internet-of-things),
+     [MathWorks ThingSpeak](https://thingspeak.com/),
      [Microsoft Azure IoT Hub](https://azure.microsoft.com/en-us/services/iot-hub/)
      or [Adafruit IO](https://io.adafruit.com/)
  * Handles (any number of) Class A or Class C devices.
@@ -149,7 +151,7 @@ problem was not already reported and then
 The server is used (both commercially and non-commercially) by various companies
 and institutions. It was mentioned by the following blogs and articles:
  * [Three reasons for creating an Open Source LoRaWan server](http://research.konicaminolta.eu/three-reasons-for-creating-an-open-source-lorawan-server)
- * [LoraWAN server running on OpenWrt/LEDE](http://www.matchx.io/developers/forum/box/3-lorawan-server-running-on-openwrt-lede#3)
+ * [LoraWAN server running on OpenWrt/LEDE](http://matchx.io/community/box/5-lorawan-server-running-on-the-box)
  * [Espruino RN2483 LoRa Modules](http://www.espruino.com/RN2483)
 
 Please let me know if you use the lorawan-server and want to be listed here.

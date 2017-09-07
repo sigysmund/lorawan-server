@@ -28,28 +28,29 @@ init([PktFwdOpts]) ->
         {ok, Socket} ->
             {ok, #state{sock=Socket, tokens=maps:new()}};
         {error, Reason} ->
-            lager:error("Failed to start the packet_forwarder interface: ~w", [Reason]),
+            lager:error("Failed to start the packet_forwarder interface: ~p", [Reason]),
             {stop, Reason}
     end.
 
 handle_call(_Request, _From, State) ->
     {stop, {error, unknownmsg}, State}.
 
-handle_cast({send, {Host, Port, Version}, DevAddr, TxQ, RFCh, PHYPayload},
+handle_cast({send, {Host, Port, Version}, #request{tmst=UStamp}, DevAddr, TxQ, RFCh, PHYPayload},
         #state{sock=Socket, tokens=Tokens}=State) ->
     Pk = [{txpk, build_txpk(TxQ, RFCh, PHYPayload)}],
-    % lager:debug("<--- ~w", [Pk]),
-    Token = crypto:strong_rand_bytes(2),
+    % lager:debug("<--- ~p", [Pk]),
+    <<Token:16>> = crypto:strong_rand_bytes(2),
     {ok, Timer} = timer:send_after(30000, {no_ack, Token}),
+    DStamp = erlang:monotonic_time(milli_seconds),
     % PULL RESP
-    ok = gen_udp:send(Socket, Host, Port, <<Version, Token/binary, 3, (jsx:encode(Pk))/binary>>),
-    {noreply, State#state{tokens=maps:put(Token, {Timer, DevAddr}, Tokens)}}.
+    ok = gen_udp:send(Socket, Host, Port, <<Version, Token:16, 3, (jsx:encode(Pk))/binary>>),
+    {noreply, State#state{tokens=maps:put(Token, {Timer, DevAddr, UStamp, DStamp}, Tokens)}}.
 
 % PUSH DATA
 handle_info({udp, Socket, Host, Port, <<Version, Token:16, 0, MAC:8/binary, Data/binary>>}, #state{sock=Socket}=State) ->
     case catch jsx:decode(Data, [return_maps, {labels, atom}]) of
         Data2 when is_map(Data2) ->
-            % lager:debug("---> ~w", [Data2]),
+            % lager:debug("---> ~p", [Data2]),
             lists:foreach(
                 fun ({rxpk, Pk}) -> rxpk(MAC, Pk);
                     ({stat, Pk}) -> status(MAC, Pk);
@@ -57,7 +58,7 @@ handle_info({udp, Socket, Host, Port, <<Version, Token:16, 0, MAC:8/binary, Data
                     % https://github.com/Ideetron/packet_forwarder/blob/master/poly_pkt_fwd/src/poly_pkt_fwd.c#L2085
                     ({time, _Time}) -> ok;
                     (Else) ->
-                        lager:warning("Unknown element in JSON: ~w", [Else])
+                        lager:warning("Unknown element in JSON: ~p", [Else])
                 end,
                 maps:to_list(Data2));
         _Else ->
@@ -76,37 +77,50 @@ handle_info({udp, Socket, Host, Port, <<Version, Token:16, 2, MAC:8/binary>>}, #
     {noreply, State};
 
 % TX ACK
-handle_info({udp, Socket, _Host, _Port, <<_Version, _Token:16, 5, _MAC:8/binary>>}, #state{sock=Socket}=State) ->
-    % no error occured
-    {noreply, State};
-
-% TX ACK
 handle_info({udp, Socket, _Host, _Port, <<_Version, Token:16, 5, MAC:8/binary, Data/binary>>},
         #state{sock=Socket, tokens=Tokens}=State) ->
     {Opaque, Tokens2} =
         case maps:take(Token, Tokens) of
-            {{Timer, Opq}, Tkns} ->
+            {{Timer, Opq, UStamp, DStamp}, Tkns} ->
+                AStamp = erlang:monotonic_time(milli_seconds),
                 {ok, cancel} = timer:cancel(Timer),
+                {atomic, ok} = mnesia:transaction(
+                    fun() ->
+                        [G] = mnesia:read(gateways, MAC, write),
+                        SDelay =
+                            case UStamp of
+                                undefined -> undefined;
+                                Num -> DStamp-Num
+                            end,
+                        mnesia:write(gateways, store_delay(G, {calendar:universal_time(), SDelay, AStamp-DStamp}), write)
+                    end),
                 {Opq, Tkns};
             error ->
                 {undefined, Tokens}
         end,
-    case catch jsx:decode(Data, [return_maps, {labels, atom}]) of
-        Data2 when is_map(Data2) ->
-            Ack = maps:get(txpk_ack, Data2),
-            case maps:get(error, Ack, undefined) of
-                undefined -> ok;
-                <<"NONE">> -> ok;
-                Error ->
-                    lorawan_gw_router:downlink_error(MAC, Opaque, Error)
-            end;
+    case Data of
+        <<>> ->
+            % no error occured
+            ok;
         _Else ->
-            lager:error("Ignored PUSH_DATA: JSON syntax error")
+            case catch jsx:decode(Data, [return_maps, {labels, atom}]) of
+                Data2 when is_map(Data2) ->
+                    Ack = maps:get(txpk_ack, Data2),
+                    case maps:get(error, Ack, undefined) of
+                        undefined -> ok;
+                        <<"NONE">> -> ok;
+                        Error ->
+                            lorawan_gw_router:downlink_error(MAC, Opaque, Error)
+                    end;
+                Else ->
+                    lager:error("Ignored PUSH_DATA: JSON syntax error: ~w", [Else])
+            end
     end,
     {noreply, State#state{tokens=Tokens2}};
 
 % something strange
-handle_info({udp, _Socket, _Host, _Port, _Msg}, State) ->
+handle_info({udp, _Socket, _Host, _Port, Msg}, State) ->
+    lager:debug("Weird data ~w", [Msg]),
     {noreply, State};
 
 handle_info({no_ack, Token}, #state{tokens=Tokens}=State) ->
@@ -119,7 +133,7 @@ handle_info({no_ack, Token}, #state{tokens=Tokens}=State) ->
 
 terminate(Reason, _State) ->
     % record graceful shutdown in the log
-    lager:info("packet_forwarder interface terminated: ~w", [Reason]),
+    lager:info("packet_forwarder interface terminated: ~p", [Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -136,16 +150,15 @@ rxpk(MAC, PkList) ->
         lists:map(
             fun(Pk) ->
                 {RxQ, Data} = parse_rxpk(Pk),
-                {MAC, RxQ#rxq{srvtmst=Stamp}, Data}
+                {#request{tmst=Stamp}, MAC, RxQ#rxq{srvtmst=Stamp}, Data}
             end, PkList)).
 
 parse_rxpk(Pk) ->
     Data = base64:decode(maps:get(data, Pk)),
-    case maps:get(modu, Pk) of
-        <<"LORA">> ->
-            RxQ = list_to_tuple([rxq|[get_rxpk_field(X, Pk) || X <- record_info(fields, rxq)]]),
-            {RxQ, Data}
-    end.
+    % the modu field is ignored
+    % we assume "LORA" datr is a binary string and "FSK" datr is an integer
+    RxQ = list_to_tuple([rxq|[get_rxpk_field(X, Pk) || X <- record_info(fields, rxq)]]),
+    {RxQ, Data}.
 
 get_rxpk_field(time, List) ->
     case maps:get(time, List, undefined) of
@@ -157,6 +170,11 @@ get_rxpk_field(Field, List) ->
 
 
 build_txpk(TxQ, RFch, Data) ->
+    Modu =
+        case TxQ#txq.datr of
+            Bin when is_binary(Bin) -> <<"LORA">>;
+            Num when is_integer(Num) -> <<"FSK">>
+        end,
     lists:foldl(
         fun ({_, undefined}, Acc) ->
                 Acc;
@@ -170,8 +188,13 @@ build_txpk(TxQ, RFch, Data) ->
                 Acc; % internal parameter
             (Elem, Acc) -> [Elem | Acc]
         end,
-        [{modu, <<"LORA">>}, {rfch, RFch}, {ipol, true}, {size, byte_size(Data)}, {data, base64:encode(Data)}],
+        [{modu, Modu}, {rfch, RFch}, {ipol, true}, {size, byte_size(Data)}, {data, base64:encode(Data)}],
         lists:zip(record_info(fields, txq), tl(tuple_to_list(TxQ)))
     ).
+
+store_delay(#gateway{delays=undefined}=Gateway, Delay) ->
+    Gateway#gateway{delays=[Delay]};
+store_delay(#gateway{delays=Past}=Gateway, Delay) ->
+    Gateway#gateway{delays=lists:sublist([Delay | Past], 50)}.
 
 % end of file

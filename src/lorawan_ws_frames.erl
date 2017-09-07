@@ -87,15 +87,18 @@ websocket_info({send, Gateway, #link{appid=AppID}=Link, RxData, RxQ}, #state{for
             [Rec] -> Rec#handler{format=Format};
             [] -> #handler{format=Format}
         end,
-    {Charset, Data, _Vars} =
-        lorawan_application_backend:parse_uplink(Handler, Gateway, Link, RxData, RxQ),
-    {reply, {Charset, Data}, State};
+    case lorawan_application_backend:parse_uplink(Handler, Gateway, Link, RxData, RxQ) of
+        {<<"application/octet-stream">>, Data, _Vars} ->
+            {reply, {binary, Data}, State};
+        {_Else, Data, _Vars} ->
+            {reply, {text, Data}, State}
+    end;
 websocket_info(Info, State) ->
-    lager:warning("Unknown info ~w", [Info]),
+    lager:warning("Unknown info ~p", [Info]),
     {ok, State}.
 
 terminate(Reason, _Req, _State) ->
-    lager:debug("WebSocket terminated: ~w", [Reason]),
+    lager:debug("WebSocket terminated: ~p", [Reason]),
     ok.
 
 get_processes(DevAddr, AppID) ->
