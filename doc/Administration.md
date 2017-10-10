@@ -16,8 +16,10 @@ The management web-pages are available under `/admin`. It is a wrapper around
 the REST API described below.
 
 The server Dashboard shows:
- * List of [Gateways](Infrastructure.md), [Devices](Devices.md) and
-   [Nodes](Nodes.md).
+ * Rolling timeline displaying recent Frames and [Events](Events.md).
+ * Server information and a list of [Gateways](Infrastructure.md),
+   [Devices](Devices.md) and [Nodes](Nodes.md) that may need your attention.
+   The lines are sorted by severity.
  * Seven most recent [Events](Events.md) and seven most recent frames received.
 
 The following configuration pages are available:
@@ -183,9 +185,9 @@ the proxy configuration as follows.
 
 ## Backup and Restore
 
-Use the `dbexport` script to backup your list of users, gateways, devices and nodes.
-This will create several `db*.json` files. Use the `dbimport` script to write these
-files back to the server database.
+Use the `bin/dbexport` script to backup your database. This will create a `backup-xxx`
+directory with several `*.json` files. Use the `bin/dbimport backup-xxx` script to
+write these files back to the server database.
 
 The database is stored in the `Mnesia.lorawan@localhost` directory. To upgrade
 the database structure or recover from database errors you should do `dbexport`,

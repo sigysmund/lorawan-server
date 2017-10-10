@@ -5,7 +5,7 @@
 %
 {application, lorawan_server,
     [{description, "LoRaWAN Application Server"},
-    {vsn, "0.4.10"},
+    {vsn, "0.4.12"},
     {modules, []},
     {registered, []},
     {mod, {lorawan_app, []}},
@@ -36,7 +36,12 @@
             % Multitech Private Hybrid Mode
             % http://www.multitech.net/developer/software/lora/introduction-to-lora
             {<<"US902-928-PR">>, [
-                {rx2_rf, {undefined, <<"SF12BW500">>, <<"4/5">>}}
+                {join1_delay, 1000000},
+                {join2_delay, 2000000},
+                {rx1_delay, 1000000},
+                {rx2_delay, 2000000},
+                % although the frequency is not used for this region, it is sent in RXParamSetupReq
+                {rx2_rf, {923.3, <<"SF12BW500">>, <<"4/5">>}}
             ]},
             {<<"CN779-787">>, [
                 {rx2_rf, {786, <<"SF12BW125">>, <<"4/5">>}}
@@ -58,7 +63,8 @@
             ]}
         ]},
         % {sec, fcnt} after which the device status should be request
-        {devstat_gap, {86400, 24}},
+        % by default: 5 days or 4*24 frames
+        {devstat_gap, {432000, 96}},
         {max_lost_after_reset, 10},
         % packet_forwarder's push_timeout_ms + transport + deduplication_delay
         {preprocessing_delay, 300},

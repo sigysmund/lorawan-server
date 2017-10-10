@@ -19,7 +19,7 @@ For each active network Node you can set:
  * *FCnt Check* to be used for this device (see the Devices section for more explanation).
  * *TX Window* to be used for downlinks to this device.
 
-The *US 902-928MHz* region allows a private *hybrid* mode introduced by
+The *US 902-928MHz* region allows a *Private Hybrid* mode introduced by
 [Multitech](www.multitech.net/developer/software/lora/introduction-to-lora).
 This is useful when you want to split the radio spectrum to 8 different sub-bands,
 but it requires custom device firmware.
@@ -44,15 +44,22 @@ frames.
 
 ## Status
 
-Device status indicates the recent device *Battery* level (0-255) and the
-Signal-to-Noise-Ratio of received downlinks (*D/L SNR*).
-
-The *Status Time* and *Status FCnt* indicate when was the status last
-received by the server.
+Shows:
+ - *Alerts* that may need your attention:
+   * `battery_low` when the device battery is below 20% its capacity;
+   * `downlink_noise` when the indicated D/L SNR is close to the sensitivity limit;
+   * `many_resets` when the device sent multiple Join requests without sending
+     any other frames.
+ - *Request Status* flag, which can be used to disable the status requests for
+   simple devices that do not support it (by default true);
+ - *Status Time* and *Status FCnt* indicating when was the status last
+   received by the server;
+ - *Device Status* graph that shows the recent device *Battery* level (0-255)
+   and the Signal-to-Noise-Ratio of received downlinks (*D/L SNR*).
 
 The server requests the device status upon join or reset and then at given
 time/fcnt intervals defined by the `devstat_gap` parameter. By default
-`{devstat_gap, {86400, 24}}`, which requests the status every 24 hours or
-every 24 frames (whatever occurs first).
+`{devstat_gap, {432000, 96}}`, which requests the status every 5 days or
+every 96 frames (whatever occurs first).
 
 The server also requests device status when the ADR parameters change.

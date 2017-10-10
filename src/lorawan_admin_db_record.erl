@@ -10,7 +10,7 @@
 -export([allowed_methods/2]).
 -export([content_types_provided/2]).
 -export([content_types_accepted/2]).
--export([resource_exists/2]).
+-export([resource_exists/2, generate_etag/2]).
 -export([delete_resource/2]).
 
 -export([handle_get/2, handle_write/2]).
@@ -26,7 +26,7 @@ init(Req, [Table, Record, Fields, Module]) ->
     init0(Req, Table, Record, Fields, Module).
 
 init0(Req, Table, Record, Fields, Module) ->
-    Key = lorawan_admin:parse(hd(Fields), cowboy_req:binding(hd(Fields), Req)),
+    Key = lorawan_admin:parse_field(hd(Fields), cowboy_req:binding(hd(Fields), Req)),
     {cowboy_rest, Req, #state{table=Table, record=Record, fields=Fields, key=Key, module=Module}}.
 
 is_authorized(Req, State) ->
@@ -65,13 +65,21 @@ sort(Req, List) ->
             List;
         #{'_sortDir' := <<"ASC">>, '_sortField' := Field} ->
             lists:sort(
-                fun(A,B) ->
-                    get_field(Field, A) =< get_field(Field, B)
+                fun(A0,B0) ->
+                    case {get_field(Field, A0), get_field(Field, B0)} of
+                        {null, _B} -> true;
+                        {_A, null} -> false;
+                        {A, B} -> A =< B
+                    end
                 end, List);
         #{'_sortDir' := <<"DESC">>, '_sortField' := Field} ->
             lists:sort(
-                fun(A,B) ->
-                    get_field(Field, A) >= get_field(Field, B)
+                fun(A0,B0) ->
+                    case {get_field(Field, A0), get_field(Field, B0)} of
+                        {_A, null} -> true;
+                        {null, _B} -> false;
+                        {A, B} -> A >= B
+                    end
                 end, List)
     end.
 
@@ -79,10 +87,10 @@ get_field(Field, Value) ->
     get_fields(binary:split(Field, <<$.>>), Value).
 
 get_fields(_Any, undefined) ->
-    undefined;
+    null;
 get_fields([Field | Rest], Value) ->
     AField = binary_to_existing_atom(Field, latin1),
-    get_fields(Rest, maps:get(AField, Value, undefined));
+    get_fields(Rest, maps:get(AField, Value, null));
 get_fields([], Value) ->
     Value.
 
@@ -100,14 +108,22 @@ get_filters(Req) ->
     end.
 
 build_record(Rec, #state{fields=Fields, module=Module}) ->
-    apply(Module, build, [
-        maps:from_list(
-            lists:filter(
-                fun ({_, undefined}) -> false;
-                    (_) -> true
-                end,
-                lists:zip(Fields, tl(tuple_to_list(Rec)))))
-        ]).
+    Record =
+        apply(Module, build, [
+            maps:from_list(
+                lists:filter(
+                    % TODO: isn't this removed twice (see admin:build)
+                    fun ({_, undefined}) -> false;
+                        (_) -> true
+                    end,
+                    lists:zip(Fields, tl(tuple_to_list(Rec)))))
+            ]),
+    case apply(Module, check_health, [Rec]) of
+        {Decay, Alerts} ->
+            Record#{health_decay => Decay, health_alerts => Alerts};
+        undefined ->
+            Record
+    end.
 
 content_types_accepted(Req, State) ->
     {[
@@ -134,7 +150,8 @@ import_records(Object, State) when is_map(Object) ->
     ok.
 
 write_record(List, #state{table=Table, record=Record, fields=Fields, module=Module}) ->
-    Rec = list_to_tuple([Record|[maps:get(X, apply(Module, parse, [List]), undefined) || X <- Fields]]),
+    List2 = apply(Module, parse, [List]),
+    Rec = list_to_tuple([Record | [maps:get(X, List2, undefined) || X <- Fields]]),
     % make sure there is a primary key
     case element(2, Rec) of
         undefined ->
@@ -150,6 +167,18 @@ resource_exists(Req, #state{table=Table, key=Key}=State) ->
     case mnesia:dirty_read(Table, Key) of
         [] -> {false, Req, State};
         [_] -> {true, Req, State}
+    end.
+
+generate_etag(Req, #state{key=undefined}=State) ->
+    {undefined, Req, State};
+generate_etag(Req, #state{table=Table, key=Key, module=Module}=State) ->
+    case mnesia:dirty_read(Table, Key) of
+        [] ->
+            {undefined, Req, State};
+        [Rec] ->
+            Health = apply(Module, check_health, [Rec]),
+            Hash = base64:encode(crypto:hash(sha256, term_to_binary({Rec, Health}))),
+            {<<$", Hash/binary, $">>, Req, State}
     end.
 
 delete_resource(Req, #state{table=Table, key=Key}=State) ->

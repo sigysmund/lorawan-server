@@ -6,7 +6,10 @@
 -module(lorawan_admin).
 
 -export([handle_authorization/2]).
--export([parse/1, parse/2, build/1, build/2]).
+-export([check_health/1, check_health/3, parse/1, build/1]).
+-export([parse_field/2, build_field/2]).
+
+-export([check_reception/1, check_reset/1, check_battery/1, check_margin/1]).
 
 -include_lib("lorawan_server_api/include/lorawan_application.hrl").
 -include("lorawan.hrl").
@@ -33,62 +36,80 @@ authorized_password(Role, User, Pass) ->
             false
     end.
 
-parse(Object) when is_map(Object) ->
-    maps:map(fun(Key, Value) -> parse(Key, Value) end,
-        Object).
+check_health(#gateway{} = Gateway) ->
+    check_health(Gateway, ?MODULE, [check_reception]);
+check_health(#link{} = Link) ->
+    check_health(Link, ?MODULE, [check_reset, check_battery, check_margin]);
+check_health(_Other) ->
+    undefined.
 
-parse(_Key, Value) when Value == null; Value == undefined ->
-    undefined;
-parse(Key, Value) when Key == mac; Key == last_mac; Key == netid; Key == mask;
-                        Key == deveui; Key == appeui; Key == appkey; Key == link;
-                        Key == devaddr; Key == nwkskey; Key == appskey;
-                        Key == data; Key == frid; Key == evid; Key == eid ->
-    lorawan_mac:hex_to_binary(Value);
-parse(Key, Value) when Key == subid ->
-    parse_bitstring(Value);
-parse(Key, Value) when Key == severity; Key == entity ->
-    binary_to_existing_atom(Value, latin1);
-parse(Key, Value) when Key == gpspos ->
-    parse_latlon(Value);
-parse(Key, Value) when Key == adr_use; Key == adr_set ->
-    parse_adr(Value);
-parse(Key, Value) when Key == rxwin_use; Key == rxwin_set ->
-    parse_rxwin(Value);
-parse(Key, Value) when Key == rxq; Key == last_rxq ->
-    ?to_record(rxq, parse(Value));
-parse(Key, Value) when Key == txdata ->
-    ?to_record(txdata, parse(Value));
-parse(Key, Value) when Key == last_join; Key == last_reset; Key == datetime;
-                        Key == devstat_time; Key == first_rx; Key == last_rx ->
-    iso8601:parse(Value);
-parse(Key, <<"immediately">>) when Key == time ->
-    immediately;
-parse(Key, Value) when Key == time ->
-    iso8601:parse_exact(Value);
-parse(Key, Value) when Key == devstat ->
-    parse_devstat(Value);
-parse(Key, Value) when Key == dwell ->
-    lists:map(
-        fun(#{time:=Time, freq:=Freq, duration:=Duration, hoursum:=Sum}) ->
-            {iso8601:parse_exact(Time), {Freq, Duration, Sum}}
-        end, Value);
-parse(Key, Value) when Key == delays ->
-    lists:map(
-        fun(#{date:=Date, srvdelay:=SDelay, nwkdelay:=NDelay}) ->
-            {iso8601:parse(Date), SDelay, NDelay}
-        end, Value);
-parse(Key, Value) when Key == last_qs ->
-    lists:map(fun(Item) -> parse_qs(Item) end, Value);
-parse(Key, Value) when Key == average_qs ->
-    parse_qs(Value);
-parse(Key, Value) when Key == build; Key == parse ->
-    parse_fun(Value);
-parse(_Key, Value) ->
-    Value.
+check_health(Rec, Module, Funs) ->
+    lists:foldl(
+        fun
+            (_Fun, undefined) ->
+                undefined;
+            (Fun, {Decay, Alerts}) ->
+                case apply(Module, Fun, [Rec]) of
+                    {DecayInc, AlertInc} ->
+                        {Decay + DecayInc, [AlertInc | Alerts]};
+                    ok ->
+                        {Decay, Alerts};
+                    undefined ->
+                        undefined
+                end
+        end,
+        {0, []}, Funs).
+
+check_reception(#gateway{last_rx=undefined}) ->
+    {100, disconnected};
+check_reception(#gateway{last_rx=LastRx}) ->
+    case calendar:datetime_to_gregorian_seconds(calendar:universal_time()) -
+            calendar:datetime_to_gregorian_seconds(LastRx) of
+        Silent when Silent > 20 ->
+            {Silent div 20, disconnected};
+        _Else ->
+            ok
+    end.
+
+check_reset(#link{last_reset=LastRes, reset_count=Count, last_rx=LastRx})
+        when LastRes /= undefined, is_number(Count), Count > 1, (LastRx == undefined orelse LastRes > LastRx) ->
+    {20*(Count-1), many_resets};
+check_reset(#link{}) ->
+    ok.
+
+check_battery(#link{devstat=[{_Time, Battery, _Margin, _MaxSNR}|_]}) ->
+    if
+        Battery == 0 ->
+            % connected to external power
+            ok;
+        Battery < 50 ->
+            % TODO: should estimate trend instead
+            {100-2*Battery, battery_low};
+        Battery == 255 ->
+            {25, cannot_measure_battery};
+        true ->
+            ok
+    end;
+check_battery(#link{}) ->
+    undefined.
+
+check_margin(#link{devstat=[{_Time, _Battery, Margin, MaxSNR}|_]}) ->
+    if
+        Margin =< MaxSNR+10 ->
+            {5*(Margin-MaxSNR), downlink_noise};
+        true ->
+            ok
+    end;
+check_margin(#link{}) ->
+    undefined.
+
+parse(Object) when is_map(Object) ->
+    maps:map(fun(Key, Value) -> parse_field(Key, Value) end,
+        Object).
 
 build(Object) when is_map(Object) ->
     maps:map(
-        fun(Key, Value) -> build(Key, Value) end,
+        fun(Key, Value) -> build_field(Key, Value) end,
         maps:filter(
             fun
                 (_Key, undefined) -> false;
@@ -97,51 +118,102 @@ build(Object) when is_map(Object) ->
                 (_, _) -> true
             end, Object)).
 
-build(_Key, undefined) ->
+parse_field(_Key, Value) when Value == null; Value == undefined ->
+    undefined;
+parse_field(Key, Value) when Key == mac; Key == last_mac; Key == netid; Key == mask;
+                        Key == deveui; Key == appeui; Key == appkey; Key == link;
+                        Key == devaddr; Key == nwkskey; Key == appskey;
+                        Key == data; Key == frid; Key == evid; Key == eid ->
+    lorawan_mac:hex_to_binary(Value);
+parse_field(Key, Value) when Key == subid ->
+    parse_bitstring(Value);
+parse_field(Key, Value) when Key == severity; Key == entity ->
+    binary_to_existing_atom(Value, latin1);
+parse_field(Key, Value) when Key == gpspos ->
+    parse_latlon(Value);
+parse_field(Key, Value) when Key == adr_use; Key == adr_set ->
+    parse_adr(Value);
+parse_field(Key, Value) when Key == rxwin_use; Key == rxwin_set ->
+    parse_rxwin(Value);
+parse_field(Key, Value) when Key == rxq; Key == last_rxq ->
+    ?to_record(rxq, parse(Value));
+parse_field(Key, Value) when Key == txdata ->
+    ?to_record(txdata, parse(Value));
+parse_field(Key, Value) when Key == last_join; Key == first_reset; Key == last_reset;
+                        Key == datetime; Key == devstat_time;
+                        Key == first_rx; Key == last_rx ->
+    iso8601:parse(Value);
+parse_field(Key, <<"immediately">>) when Key == time ->
+    immediately;
+parse_field(Key, Value) when Key == time ->
+    iso8601:parse_exact(Value);
+parse_field(Key, Value) when Key == devstat ->
+    parse_devstat(Value);
+parse_field(Key, Value) when Key == dwell ->
+    lists:map(
+        fun(#{time:=Time, freq:=Freq, duration:=Duration, hoursum:=Sum}) ->
+            {iso8601:parse_exact(Time), {Freq, Duration, Sum}}
+        end, Value);
+parse_field(Key, Value) when Key == delays ->
+    lists:map(
+        fun(#{date:=Date, srvdelay:=SDelay, nwkdelay:=NDelay}) ->
+            {iso8601:parse(Date), SDelay, NDelay}
+        end, Value);
+parse_field(Key, Value) when Key == last_qs ->
+    lists:map(fun(Item) -> parse_qs(Item) end, Value);
+parse_field(Key, Value) when Key == average_qs ->
+    parse_qs(Value);
+parse_field(Key, Value) when Key == build; Key == parse ->
+    parse_fun(Value);
+parse_field(_Key, Value) ->
+    Value.
+
+build_field(_Key, undefined) ->
     null;
-build(Key, Value) when Key == mac; Key == last_mac; Key == netid; Key == mask;
+build_field(Key, Value) when Key == mac; Key == last_mac; Key == netid; Key == mask;
                         Key == deveui; Key == appeui; Key == appkey; Key == link;
                         Key == devaddr; Key == nwkskey; Key == appskey;
                         Key == data; Key == frid; Key == evid; Key == eid ->
     lorawan_mac:binary_to_hex(Value);
-build(Key, Value) when Key == subid ->
+build_field(Key, Value) when Key == subid ->
     build_bitstring(Value);
-build(Key, Value) when Key == severity; Key == entity ->
+build_field(Key, Value) when Key == severity; Key == entity ->
     atom_to_binary(Value, latin1);
-build(Key, Value) when Key == gpspos ->
+build_field(Key, Value) when Key == gpspos ->
     build_latlon(Value);
-build(Key, Value) when Key == adr_use; Key == adr_set ->
+build_field(Key, Value) when Key == adr_use; Key == adr_set ->
     build_adr(Value);
-build(Key, Value) when Key == rxwin_use; Key == rxwin_set ->
+build_field(Key, Value) when Key == rxwin_use; Key == rxwin_set ->
     build_rxwin(Value);
-build(Key, Value) when Key == rxq; Key == last_rxq ->
+build_field(Key, Value) when Key == rxq; Key == last_rxq ->
     build(?to_map(rxq, Value));
-build(Key, Value) when Key == txdata ->
+build_field(Key, Value) when Key == txdata ->
     build(?to_map(txdata, Value));
-build(Key, immediately) when Key == time ->
+build_field(Key, immediately) when Key == time ->
     <<"immediately">>;
-build(Key, Value) when Key == last_join; Key == last_reset; Key == datetime;
-                        Key == devstat_time; Key == time; Key == first_rx; Key == last_rx ->
+build_field(Key, Value) when Key == last_join; Key == first_reset; Key == last_reset;
+                        Key == datetime; Key == devstat_time; Key == time;
+                        Key == first_rx; Key == last_rx ->
     iso8601:format(Value);
-build(Key, Value) when Key == devstat ->
+build_field(Key, Value) when Key == devstat ->
     build_devstat(Value);
-build(Key, Value) when Key == dwell ->
+build_field(Key, Value) when Key == dwell ->
     lists:map(fun({Time, {Freq, Duration, Sum}}) ->
                 #{time=>iso8601:format(Time), freq=>Freq, duration=>Duration, hoursum=>Sum}
               end, Value);
-build(Key, Value) when Key == delays ->
+build_field(Key, Value) when Key == delays ->
     lists:map(fun({Date, SDelay, NDelay}) -> #{date=>iso8601:format(Date), srvdelay=>SDelay, nwkdelay=>NDelay};
                 ({Date, NDelay}) -> #{date=>iso8601:format(Date), srvdelay=>undefined, nwkdelay=>NDelay}
               end, Value);
-build(Key, Value) when Key == last_qs ->
+build_field(Key, Value) when Key == last_qs ->
     lists:map(fun(Item) -> build_qs(Item) end, Value);
-build(Key, Value) when Key == average_qs ->
+build_field(Key, Value) when Key == average_qs ->
     build_qs(Value);
-build(Key, Value) when Key == build; Key == parse ->
+build_field(Key, Value) when Key == build; Key == parse ->
     build_fun(Value);
-build(Key, Value) when Key == gateway ->
+build_field(Key, Value) when Key == gateway ->
     build(Value);
-build(_Key, Value) ->
+build_field(_Key, Value) ->
     Value.
 
 parse_bitstring(Map) ->
@@ -202,11 +274,25 @@ build_rxwin({RX1DROffset, RX2DataRate, Frequency}) ->
     #{rx1_dr_offset => build_opt(RX1DROffset),
         rx2_dr => build_opt(RX2DataRate), rx2_freq => build_opt(Frequency)}.
 
-parse_devstat(List) ->
-    {parse_opt(battery, List), parse_opt(margin, List)}.
+parse_devstat(Value) ->
+    lists:map(
+        fun(#{datetime := DateTime, battery := Battery, margin := Margin, max_snr := MaxSNR}) ->
+            {iso8601:parse(DateTime), Battery, Margin, MaxSNR}
+        end, Value).
 
+% backward compatibility
 build_devstat({Battery, Margin}) ->
-    #{battery => build_opt(Battery), margin => build_opt(Margin)}.
+    [#{datetime => iso8601:format(calendar:universal_time()),
+        battery => build_opt(Battery), margin => build_opt(Margin), max_snr => 0}];
+build_devstat(Value) ->
+    lists:map(
+        fun({Timestamp, Battery, Margin, MaxSNR}) ->
+            #{datetime => iso8601:format(Timestamp), battery => Battery, margin => Margin, max_snr => MaxSNR};
+        % backward compatibility
+        % REMOVE BEFORE RELEASING 0.4.11
+        ({Timestamp, Battery, Margin}) ->
+            #{datetime => iso8601:format(Timestamp), battery => Battery, margin => Margin, max_snr => 0}
+        end, Value).
 
 parse_qs(List) ->
     {parse_opt(rssi, List), parse_opt(snr, List)}.
@@ -214,6 +300,8 @@ parse_qs(List) ->
 build_qs({RSSI, SNR}) ->
     #{rssi => build_opt(RSSI), snr => build_opt(SNR)}.
 
+parse_fun(<<>>) ->
+    undefined;
 parse_fun(Code) ->
     % try to parse the function
     {ok, Ts, _} = erl_scan:string(binary_to_list(Code)),

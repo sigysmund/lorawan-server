@@ -30,7 +30,7 @@ For each device, which may connect to your network, you can set:
  * *Can Join?* flag that allows you to prevent the device from joining.
  * *Last Join* is a timestamp of the last successful Join request.
 
-The *US 902-928MHz* region allows a private *hybrid* mode introduced by
+The *US 902-928MHz* region allows a *Private Hybrid* mode introduced by
 [Multitech](www.multitech.net/developer/software/lora/introduction-to-lora).
 This is useful when you want to split the radio spectrum to 8 different sub-bands,
 but it requires custom device firmware.
@@ -44,3 +44,10 @@ Once the device joins the network, the *Node* field will contain a reference to 
 
 Optionally, you can also define a set of [ADR](ADR.md) parameters. Once the device
 joins the network, the server will attempt to configure the device accordingly.
+
+
+## Status
+
+You can set:
+ - *Request Status* flag, which can be used to disable the status requests for
+   simple devices that do not support it (by default true).

@@ -52,7 +52,7 @@ parse_fopts(<<16#04, Rest/binary>>) ->
     [duty_cycle_ans | parse_fopts(Rest)];
 parse_fopts(<<16#05, _RFU:5, RX1DROffsetACK:1, RX2DataRateACK:1, ChannelACK:1, Rest/binary>>) ->
     [{rx_param_setup_ans, RX1DROffsetACK, RX2DataRateACK, ChannelACK} | parse_fopts(Rest)];
-parse_fopts(<<16#06, Battery:8, _RFU:2, Margin:6, Rest/binary>>) ->
+parse_fopts(<<16#06, Battery:8, _RFU:2, Margin:6/signed, Rest/binary>>) ->
     [{dev_status_ans, Battery, Margin} | parse_fopts(Rest)];
 parse_fopts(<<16#07, _RFU:6, DataRateRangeOK:1, ChannelFreqOK:1, Rest/binary>>) ->
     [{new_channel_ans, DataRateRangeOK, ChannelFreqOK} | parse_fopts(Rest)];
@@ -138,11 +138,27 @@ find_rxwin(FOptsIn) ->
 handle_status(FOptsIn, Link) ->
     case find_status(FOptsIn) of
         {Battery, Margin} ->
-            lager:debug("DevStatus: battery ~B, margin: ~B", [Battery, Margin-32]),
-            Link#link{devstat_time=calendar:universal_time(), devstat_fcnt=Link#link.fcntup, devstat={Battery, Margin-32}};
+            % compute a maximal D/L SNR
+            {_, DataRate, _} = Link#link.adr_use,
+            OffUse = case Link#link.rxwin_use of
+                {Num2, _, _} when is_number(Num2) -> Num2;
+                _Else2 -> 0
+            end,
+            MaxSNR = lorawan_mac_region:max_downlink_snr(Link#link.region, DataRate, OffUse),
+            lager:debug("DevStatus: battery ~B, margin: ~B (max ~.1f)", [Battery, Margin, MaxSNR]),
+            Link#link{devstat_time=calendar:universal_time(), devstat_fcnt=Link#link.fcntup,
+                devstat=append_status({calendar:universal_time(), Battery, Margin, MaxSNR}, Link#link.devstat)};
         undefined ->
             Link
     end.
+
+append_status(Status, undefined) ->
+    [Status];
+% backward compatibility
+append_status(Status, {Battery, Margin}) ->
+    [Status, {calendar:universal_time(), Battery, Margin}];
+append_status(Status, List) ->
+    lists:sublist([Status | List], 50).
 
 find_status(FOptsIn) ->
     lists:foldl(
@@ -153,7 +169,7 @@ find_status(FOptsIn) ->
 
 send_link_check(#rxq{datr=DataRate, lsnr=SNR}) ->
     {SF, _} = lorawan_mac_region:datar_to_tuple(DataRate),
-    Margin = trunc(SNR - max_snr(SF)),
+    Margin = trunc(SNR - lorawan_mac_region:max_snr(SF)),
     lager:debug("LinkCheckAns: margin: ~B", [Margin]),
     {link_check_ans, Margin, 1}.
 
@@ -178,7 +194,7 @@ auto_adr0(#link{last_qs=LastQs}=Link, RxFrame) when length(LastQs) >= 20 ->
     {TxPower, DataRate, _} = Link#link.adr_use,
     % how many SF steps (per Table 13) are between current SNR and current sensitivity?
     % there is 2.5 dB between the DR, so divide by 3 to get more margin
-    MaxSNR = max_snr(Link#link.region, DataRate)+10,
+    MaxSNR = lorawan_mac_region:max_uplink_snr(Link#link.region, DataRate)+10,
     StepsDR = trunc((AvgSNR-MaxSNR)/3),
     DataRate2 = if
             DataRate == undefined ->
@@ -220,25 +236,28 @@ average0(List) ->
     Sigma = math:sqrt(lists:sum([(N-Avg)*(N-Avg) || N <- List])/length(List)),
     Avg-Sigma.
 
-max_snr(Region, DataRate) ->
-    {SF, _} = lorawan_mac_region:dr_to_tuple(Region, DataRate),
-    max_snr(SF).
-
-% from SX1272 DataSheet, Table 13
-max_snr(SF) ->
-    -5-2.5*(SF-6). % dB
-
-send_adr(Link, FOptsOut) ->
-    IsIncomplete = has_undefined_field(Link#link.adr_set),
-    if
-        Link#link.adr_flag_use == 1,
-        ((Link#link.adr_flag_set == 1 andalso length(Link#link.last_qs) >= 20) orelse Link#link.adr_flag_set == 2),
-        not IsIncomplete, Link#link.adr_use /= Link#link.adr_set ->
+send_adr(#link{adr_flag_use=1}=Link, FOptsOut) ->
+    case Link of
+        #link{adr_set=NotChanged, adr_use=NotChanged} ->
+            FOptsOut;
+        #link{adr_flag_set=Flag, adr_set={TxPower, DataRate, Chans1}, adr_use={TxPower, DataRate, _Chans2}}
+                when (Flag == 1 orelse Flag == 2),
+                is_integer(TxPower), is_integer(DataRate), is_list(Chans1) ->
+            % only the channels changed
             lager:debug("LinkADRReq ~w", [Link#link.adr_set]),
             set_channels(Link#link.region, Link#link.adr_set, FOptsOut);
-        true ->
+        #link{adr_flag_set=Flag, adr_set={TxPower, DataRate, Chans}, last_qs=LastQs}
+                when ((Flag == 1 andalso length(LastQs) >= 20) orelse Flag == 2),
+                is_integer(TxPower), is_integer(DataRate), is_list(Chans) ->
+            % the ADR parameters changed
+            lager:debug("LinkADRReq ~w", [Link#link.adr_set]),
+            set_channels(Link#link.region, Link#link.adr_set, FOptsOut);
+        _Else ->
             FOptsOut
-    end.
+    end;
+send_adr(_Link, FOptsOut) ->
+    % the device has disabled ADR
+    FOptsOut.
 
 set_channels(Region, {TXPower, DataRate, Chans}, FOptsOut)
         when Region == <<"EU863-870">>; Region == <<"CN779-787">>; Region == <<"EU433">>; Region == <<"KR920-923">>; Region == <<"AS923-JP">> ->
@@ -250,7 +269,7 @@ set_channels(Region, {TXPower, DataRate, Chans}, FOptsOut)
             [{link_adr_req, DataRate, TXPower, build_bin(Chans, {64, 71}), 6, 0} | FOptsOut];
         false ->
             [{link_adr_req, DataRate, TXPower, build_bin(Chans, {64, 71}), 7, 0} |
-                append_mask(4, {TXPower, DataRate, Chans}, FOptsOut)]
+                append_mask(3, {TXPower, DataRate, Chans}, FOptsOut)]
     end;
 set_channels(Region, {TXPower, DataRate, Chans}, FOptsOut)
         when Region == <<"CN470-510">> ->
@@ -306,11 +325,6 @@ request_status(#link{devstat_time=LastDate, devstat_fcnt=LastFCnt}=Link, FOptsOu
         true ->
             FOptsOut
     end.
-
-has_undefined_field(undefined) ->
-    true;
-has_undefined_field(Tuple) ->
-    lists:member(undefined, tuple_to_list(Tuple)).
 
 % bits handling
 
@@ -377,9 +391,12 @@ bits_test_()-> [
     ?_assertEqual(true, some_bit({0, 15}, [{0,2}])),
     ?_assertEqual(false, all_bit({0, 15}, [{0,2}])),
     ?_assertEqual(false, none_bit({0, 15}, [{0,2}])),
-    ?_assertEqual([{link_adr_req,<<"SF12BW250">>,14,7,0,0}], set_channels(<<"EU863-870">>, {14, <<"SF12BW250">>, [{0, 2}]}, [])),
-    ?_assertEqual([{link_adr_req,<<"SF12BW500">>,20,0,7,0},
-        {link_adr_req,<<"SF12BW500">>,20,255,0,0}], set_channels(<<"US902-928">>, {20, <<"SF12BW500">>, [{0, 7}]}, []))
+    ?_assertEqual([{link_adr_req,<<"SF12BW250">>,14,7,0,0}],
+        set_channels(<<"EU863-870">>, {14, <<"SF12BW250">>, [{0, 2}]}, [])),
+    ?_assertEqual([{link_adr_req,<<"SF12BW500">>,20,0,7,0}, {link_adr_req,<<"SF12BW500">>,20,255,0,0}],
+        set_channels(<<"US902-928">>, {20, <<"SF12BW500">>, [{0, 7}]}, [])),
+    ?_assertEqual([{link_adr_req,<<"SF12BW500">>,20,2,7,0}, {link_adr_req,<<"SF12BW500">>,20,65280,0,0}],
+        set_channels(<<"US902-928">>, {20, <<"SF12BW500">>, [{8, 15}, {65, 65}]}, []))
 ].
 
 % end of file

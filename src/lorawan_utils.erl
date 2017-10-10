@@ -7,9 +7,9 @@
 
 -export([index_of/2]).
 -export([precise_universal_time/0, ms_diff/2, datetime_to_timestamp/1, apply_offset/2]).
--export([throw_info/2, throw_warning/2, throw_error/2]).
+-export([throw_info/2, throw_info/3, throw_warning/2, throw_warning/3, throw_error/2, throw_error/3]).
 
--include("lorawan.hrl").
+-include_lib("lorawan_server_api/include/lorawan_application.hrl").
 
 -define(MEGA, 1000000).
 
@@ -47,50 +47,72 @@ apply_offset({Date, {Hours, Min, Secs}}, {OHours, OMin, OSecs}) ->
     {Date2, {Hours2, Min2, Secs2}} = calendar:gregorian_seconds_to_datetime(TotalSecs),
     {Date2, {Hours2, Min2, Secs2+(Secs-trunc(Secs))}}.
 
-throw_info({Entity, EID}, Text) ->
-    throw_event(info, Entity, EID, Text);
 throw_info(Entity, Text) ->
-    throw_event(info, Entity, undefined, Text).
+    throw_info(Entity, Text, unique).
 
-throw_warning({Entity, EID}, Text) ->
-    throw_event(warning, Entity, EID, Text);
+throw_info({Entity, EID}, Text, Mark) ->
+    throw_event(info, {Entity, EID}, Text, Mark);
+throw_info(Entity, Text, Mark) ->
+    throw_event(info, {Entity, undefined}, Text, Mark).
+
 throw_warning(Entity, Text) ->
-    throw_event(warning, Entity, undefined, Text).
+    throw_warning(Entity, Text, unique).
 
-throw_error({Entity, EID}, Text) ->
-    throw_event(error, Entity, EID, Text);
+throw_warning({Entity, EID}, Text, Mark) ->
+    throw_event(warning, {Entity, EID}, Text, Mark);
+throw_warning(Entity, Text, Mark) ->
+    throw_event(warning, {Entity, undefined}, Text, Mark).
+
 throw_error(Entity, Text) ->
-    throw_event(error, Entity, undefined, Text).
+    throw_error(Entity, Text, unique).
+
+throw_error({Entity, EID}, Text, Mark) ->
+    throw_event(error, {Entity, EID}, Text, Mark);
+throw_error(Entity, Text, Mark) ->
+    throw_event(error, {Entity, undefined}, Text, Mark).
 
 
-throw_event(Severity, Entity, undefined, Event) ->
-    lager:log(Severity, self(), "~s ~p", [Entity, Event]),
-    write_event(Severity, Entity, undefined, Event);
+throw_event(Severity, {Entity, undefined}, Text, Mark) ->
+    lager:log(Severity, self(), "~s ~p", [Entity, Text]),
+    write_event(Severity, {Entity, undefined}, Text, Mark);
 
-throw_event(Severity, Entity, EID, Event) ->
-    lager:log(Severity, self(), "~s ~s ~p", [Entity, lorawan_mac:binary_to_hex(EID), Event]),
-    write_event(Severity, Entity, EID, Event).
+throw_event(Severity, {Entity, EID}, Text, Mark) ->
+    lager:log(Severity, self(), "~s ~s ~p", [Entity, lorawan_mac:binary_to_hex(EID), Text]),
+    write_event(Severity, {Entity, EID}, Text, Mark).
 
-write_event(Severity, Entity, EID, Event) ->
-    Text = list_to_binary(io_lib:print(Event)),
-    EvId = crypto:hash(md4, term_to_binary({Entity, EID,
-        case Event of
-            {First, _} -> First;
-            Only -> Only
-        end})),
+write_event(Severity, {Entity, EID}, Text, unique) ->
+    % first_rx and last_rx shall be identical
+    Time = calendar:universal_time(),
+    {Event, Args} = event_args(Text),
+    EvId = evid({Entity, EID}, Event, Time),
+    mnesia:dirty_write(events, #event{evid=EvId, severity=Severity,
+        first_rx=Time, last_rx=Time, count=1, entity=Entity, eid=EID, text=Event, args=Args});
+write_event(Severity, {Entity, EID}, Text, Mark) ->
+    {Event, Args} = event_args(Text),
+    EvId = evid({Entity, EID}, Event, Mark),
     {atomic, ok} =
         mnesia:transaction(fun() ->
             case mnesia:read(events, EvId, write) of
                 [E] ->
                     mnesia:write(events, E#event{last_rx=calendar:universal_time(),
-                        count=inc(E#event.count), text=Text}, write);
+                        count=inc(E#event.count), text=Event, args=Args}, write);
                 [] ->
+                    % first_rx and last_rx shall be identical
+                    Time = calendar:universal_time(),
                     mnesia:write(events, #event{evid=EvId, severity=Severity,
-                        first_rx=calendar:universal_time(), last_rx=calendar:universal_time(),
-                        count=1, entity=Entity, eid=EID, text=Text}, write)
+                        first_rx=Time, last_rx=Time, count=1,
+                        entity=Entity, eid=EID, text=Event, args=Args}, write)
             end
         end),
     ok.
+
+evid(EntityID, Event, Mark) ->
+    crypto:hash(md4, term_to_binary({EntityID, Event, Mark})).
+
+event_args({Event, Args}) ->
+    {atom_to_binary(Event, latin1), list_to_binary(io_lib:print(Args))};
+event_args(Event) ->
+    {atom_to_binary(Event, latin1), undefined}.
 
 inc(undefined) -> 1;
 inc(Num) -> Num+1.

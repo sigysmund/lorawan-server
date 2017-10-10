@@ -28,11 +28,13 @@ content_types_provided(Req, State) ->
     ], Req, State}.
 
 get_stats(Req, State) ->
+    Alarms = get_alarms(),
     {jsx:encode([[{node, node()},
         {modules, get_modules()},
         {memory, memsup:get_system_memory_data()},
         {disk, get_disk_data()},
-        {alarms, get_alarms()}]]), Req, State}.
+        {health_alerts, Alarms},
+        {health_decay, length(Alarms)}]]), Req, State}.
 
 get_modules() ->
     lists:map(
@@ -50,8 +52,9 @@ get_disk_data() ->
 
 get_alarms() ->
     lists:map(
-        fun({Id, _Desc}) ->
-            Id
+        fun
+            ({Id, _Desc}) when is_atom(Id) -> Id;
+            ({{Id, _}, _Desc}) when is_atom(Id) -> Id
         end,
         alarm_handler:get_alarms()).
 

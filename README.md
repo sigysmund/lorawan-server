@@ -11,7 +11,8 @@ The server:
      such as the Semtech LoRa demo kit,
      [LoRa Lite Gateway](https://wireless-solutions.de/products/long-range-radio/lora_lite_gateway.html),
      [LORANK-8](http://webshop.ideetron.nl/LORANK-8),
-     or [MultiConnect Conduit](http://www.multitech.com/brands/multiconnect-conduit).
+     [MultiConnect Conduit](http://www.multitech.com/brands/multiconnect-conduit),
+     or [Kerlink Wirnet Stations](http://www.kerlink.fr/en/products/lora-iot-station-2/wirnet-station-868)
  * Performs all required encryption and integrity checks.
    * Supports relaxed frame-counter check for simple ABP devices.
  * Invokes internal modules with application logic. It provides examples for:
@@ -27,15 +28,19 @@ The server:
      [Microsoft Azure IoT Hub](https://azure.microsoft.com/en-us/services/iot-hub/)
      or [Adafruit IO](https://io.adafruit.com/)
  * Handles (any number of) Class A or Class C devices.
-   * Supports both the node activation by personalization (ABP) and the over-the-air activation (OTAA).
+   * Supports both the node activation by personalization (ABP) and the
+     over-the-air activation (OTAA).
    * Supports both unconfirmed and confirmed data uplink and downlink.
    * Supports multicast to user-defined groups.
-   * Supports EU 863-870, US 902-928, CN 779-787, EU 433, AU 915-928, CN 470-510 and KR 920-923 band.
+   * Supports EU 863-870, US 902-928, CN 779-787, EU 433, AU 915-928, CN 470-510,
+     KR 920-923 and AS923-JP bands.
  * Provides a network management interface.
-   * Displays device battery and connectivity status.
+   * Monitors the server, gateways and node health status and displays device
+     battery and connection quality indicators.
    * Supports both manual and automatic configuration of TX power and data rate (ADR).
  * Runs on all major operating systems, including Windows, Linux, OS X and Solaris,
-   even on embedded systems like OpenWrt or in a [Docker container](doc/Docker.md).
+   even on [embedded systems](doc/Embedded.md) like Raspbian, mLinux and other
+   Yocto/OpenEmbedded systems, OpenWrt or in a [Docker container](doc/Docker.md).
  * Does not crash as it's implemented in [Erlang](https://www.erlang.org/), which is
    designed for building fault-tolerant systems.
  * Is free, distributed under the MIT license.
@@ -97,6 +102,7 @@ as described in the [Administration Guide](doc/Administration.md) and in the
 
 By default you can access the administration at http://*server*:8080, using
 "admin" as both username and password. After the installation you have to:
+ * Change the default password to something more secure.
  * Add LoRaWAN gateways you want to use.
  * Configure each device you want to use, either as a personalized device (ABP) or
    as an over-the-air activated (OTAA) device.

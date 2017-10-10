@@ -8,6 +8,16 @@ This document describes how to build, install and configure the lorawan-server.
 
 On the Debian Linux and its clones like Raspbian you can use the .deb package.
 
+Unless you have Debian 9 (Stretch) you have to install the Erlang/OTP 19 or later from
+[Erlang Solutions](https://www.erlang-solutions.com/resources/download.html) first:
+```bash
+wget https://packages.erlang-solutions.com/erlang-solutions_1.0_all.deb
+sudo dpkg -i erlang-solutions_1.0_all.deb
+
+sudo apt-get update
+sudo apt-get install erlang
+```
+
 Download the Debian package
 [lorawan-server-*.deb](https://github.com/gotthardp/lorawan-server/releases)
 and install it by:
@@ -22,8 +32,9 @@ Then start the server by `systemctl start lorawan-server`.
 You will need the Erlang/OTP 19 or later. Try typing `yum install erlang` or
 `apt-get install erlang`.
 
-If your Linux distribution includes some older version of Erlang/OTP, try installing
-an update from [Erlang Solutions](https://www.erlang-solutions.com/resources/download.html).
+Check your Erlang/OTP version by typing `erl`. If your Linux distribution
+includes some older version of Erlang/OTP, install an update from
+[Erlang Solutions](https://www.erlang-solutions.com/resources/download.html).
 
 Then download the latest binary release
 [lorawan-server-*.tar.gz](https://github.com/gotthardp/lorawan-server/releases)
@@ -40,10 +51,12 @@ You can run the server by:
 bin/lorawan-server
 ```
 
-By default the database directory `Mnesia.lorawan@*` and the `log` files are
-stored in the `lorawan-server` directory you created. If you want to store the
-run-time information to another directory, set the `LORAWAN_HOME` environment
-variable.
+By default the database directory `Mnesia.lorawan@*` is stored in
+the `lorawan-server` directory you created. If you want to store the run-time
+information to another directory, set the `LORAWAN_HOME` environment variable.
+
+The `log` files are by default stored in the same directory. If you want to
+store the log files elsewhere, set the `LORAWAN_LOG_ROOT` variable.
 
 The lorawan-server can be started in background as a daemon.
 On Linux systems with systemd you should:
@@ -52,7 +65,8 @@ On Linux systems with systemd you should:
  * Create a dedicated user by `useradd --home-dir /var/lib/lorawan-server --create-home lorawan`
  * Start the server by `systemctl start lorawan-server`
 
-This will put the database and the logs into `/var/lib/lorawan-server`.
+This will put the database into `/var/lib/lorawan-server` and server logs into
+`/var/log/lorawan-server`.
 
 ### Using the Binary Release on Windows
 
@@ -118,6 +132,8 @@ To upgrade your server binaries:
 Review the `lorawan-server/releases/<VERSION>/sys.config` with the server configuration:
  * To enable/disable applications, modify the `plugins` section. For more details
    see the [Custom Application Guide](Applications.md).
+ * Set `{disksup_posix_only, true}` when your embedded system uses stripped-down
+   Unix tools
 
 Note that during the manual installation the `sys.config` is created
 automatically by the release tool (`make release`) based on the
@@ -137,8 +153,15 @@ For example:
     {http_admin_listen, [{port, 8080}]},
     % default username and password for the admin interface
     {http_admin_credentials, {<<"admin">>, <<"admin">>}},
+    % amount of rxframes retained for each device/node
+    {retained_rxframes, 50},
     % websocket expiration if client sends no data
     {websocket_timeout, 3600000} % ms
+]},
+{os_mon, [
+    % Setting this parameter to true can be necessary on embedded systems with
+    % stripped-down versions of Unix tools like df.
+    {disksup_posix_only, false}
 ]}].
 ```
 
