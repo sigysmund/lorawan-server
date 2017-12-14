@@ -33,10 +33,26 @@ process_frame(MAC, RxQ, PHYPayload) ->
 
 process_status(MAC, S) ->
     if
+        S#stat.rxok < S#stat.rxnb ->
+            lager:debug("Gateway ~s had ~B uplink CRC errors", [binary_to_hex(MAC), S#stat.rxnb-S#stat.rxok]);
+        true ->
+            ok
+    end,
+    if
         S#stat.rxfw < S#stat.rxok ->
             lorawan_utils:throw_warning({gateway, MAC}, {uplinks_lost, S#stat.rxok-S#stat.rxfw});
+        true ->
+            ok
+    end,
+    if
         S#stat.txnb < S#stat.dwnb ->
             lorawan_utils:throw_warning({gateway, MAC}, {downlinks_lost, S#stat.dwnb-S#stat.txnb});
+        true ->
+            ok
+    end,
+    if
+        S#stat.ackr < 100 ->
+            lorawan_utils:throw_warning({gateway, MAC}, {ack_lost, 100-S#stat.ackr});
         true ->
             ok
     end,
@@ -107,7 +123,7 @@ process_frame1(Gateway, RxQ, <<MType:3, _:5,
     end,
     DevAddr = reverse(DevAddr0),
     Frame = #frame{devaddr=DevAddr, adr=ADR, adr_ack_req=ADRACKReq, ack=ACK, fcnt=FCnt, fport=FPort},
-    case check_link(DevAddr, FCnt) of
+    case check_link(Gateway, DevAddr, FCnt) of
         {ok, Fresh, L} ->
             case aes_cmac:aes_cmac(L#link.nwkskey, <<(b0(MType band 1, DevAddr, L#link.fcntup, byte_size(Msg)))/binary, Msg/binary>>, 4) of
                 MIC ->
@@ -127,13 +143,18 @@ process_frame1(Gateway, RxQ, <<MType:3, _:5,
                     lorawan_utils:throw_error({node, DevAddr}, bad_mic)
             end;
         ignore ->
+            <<Confirm:1, _:2>> = <<MType:3>>,
+            ok = mnesia:dirty_write(rxframes,
+                #rxframe{frid= <<(erlang:system_time()):64>>,
+                    mac=Gateway#gateway.mac, rxq=RxQ, devaddr=DevAddr, fcnt=FCnt,
+                    confirm=bit_to_bool(Confirm), port=FPort, datetime=calendar:universal_time()}),
             ok
     end;
 process_frame1(_Gateway, _RxQ, Msg, _MIC) ->
     lager:debug("Bad frame: ~p", [Msg]),
     {error, bad_frame}.
 
-handle_join(Gateway, RxQ, AppEUI, DevEUI, DevNonce, AppKey) ->
+handle_join(Gateway, RxQ, _AppEUI, DevEUI, DevNonce, AppKey) ->
     AppNonce = crypto:strong_rand_bytes(3),
     NetID = Gateway#gateway.netid,
     NwkSKey = crypto:block_encrypt(aes_ecb, AppKey,
@@ -168,8 +189,7 @@ handle_join(Gateway, RxQ, AppEUI, DevEUI, DevNonce, AppKey) ->
                 #link{first_reset=calendar:universal_time(), reset_count=0, devstat=[]}
         end,
 
-    lager:info("JOIN REQUEST ~s ~s -> ~s",
-        [binary_to_hex(AppEUI), binary_to_hex(DevEUI), binary_to_hex(Device#device.link)]),
+    lorawan_utils:throw_info({device, DevEUI}, {join, binary_to_hex(Device#device.link)}),
     Link = Link0#link{devaddr=Device#device.link, region=Device#device.region,
         app=Device#device.app, appid=Device#device.appid, appargs=Device#device.appargs,
         nwkskey=NwkSKey, appskey=AppSKey, fcntup=undefined, fcntdown=0,
@@ -252,12 +272,12 @@ txaccept(TxQ, RX1DROffset, RX2DataRate, AppKey, AppNonce, NetID, DevAddr) ->
     {send, DevAddr, TxQ, <<MHDR/binary, PHYPayload/binary>>}.
 
 
-check_link(DevAddr, FCnt) ->
+check_link(Gateway, DevAddr, FCnt) ->
     case is_ignored(DevAddr, mnesia:dirty_all_keys(ignored_links)) of
         true ->
             ignore;
         false ->
-            check_link_fcnt(DevAddr, FCnt)
+            check_link_fcnt(Gateway, DevAddr, FCnt)
     end.
 
 is_ignored(_DevAddr, []) ->
@@ -274,11 +294,24 @@ match(<<DevAddr:32>>, <<MatchAddr:32>>, undefined) ->
 match(<<DevAddr:32>>, <<MatchAddr:32>>, <<MatchMask:32>>) ->
     (DevAddr band MatchMask) == MatchAddr.
 
-check_link_fcnt(DevAddr, FCnt) ->
+check_link_fcnt(#gateway{netid = <<_:17, NwkID:7>>, subid=SubId}, DevAddr, FCnt) ->
     {ok, MaxLost} = application:get_env(lorawan_server, max_lost_after_reset),
     case mnesia:dirty_read(links, DevAddr) of
         [] ->
-            lorawan_utils:throw_error({node, DevAddr}, unknown_devaddr, aggregated),
+            {MyPrefix, MyPrefixSize} =
+                case SubId of
+                    undefined ->
+                        {NwkID, 7};
+                    Bits ->
+                        {<<NwkID:7, Bits/bitstring>>, 7+bit_size(Bits)}
+                end,
+            case DevAddr of
+                <<MyPrefix:MyPrefixSize/bitstring, _/bitstring>> ->
+                    % report errors for devices from own network only
+                    lorawan_utils:throw_error({node, DevAddr}, unknown_devaddr, aggregated);
+                _Else ->
+                    ok
+            end,
             ignore;
         [L] when L#link.fcntup == undefined ->
             % first frame after join

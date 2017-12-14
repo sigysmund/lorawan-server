@@ -9,37 +9,64 @@
 -export([check_health/1, check_health/3, parse/1, build/1]).
 -export([parse_field/2, build_field/2]).
 
--export([check_reception/1, check_reset/1, check_battery/1, check_margin/1]).
+-export([check_reception/1]).
+-export([check_reset/1, check_battery/1, check_margin/1, check_adr/1]).
 
 -include_lib("lorawan_server_api/include/lorawan_application.hrl").
 -include("lorawan.hrl").
 
+-define(REALM, <<"lorawan-server">>).
+
 handle_authorization(Req, State) ->
     case cowboy_req:parse_header(<<"authorization">>, Req) of
-        {basic, User, Pass} ->
-            case authorized_password(<<"admin">>, User, Pass) of
-                true -> {true, Req, State};
-                false -> {{false, <<"Basic realm=\"lorawan-server\"">>}, Req, State}
+        {digest, Params} ->
+            Method = cowboy_req:method(Req),
+            UserName = proplists:get_value(<<"username">>, Params, <<>>),
+            Realm = proplists:get_value(<<"realm">>, Params, <<>>),
+            Nonce = proplists:get_value(<<"nonce">>, Params, <<>>),
+            URI = proplists:get_value(<<"uri">>, Params, <<>>),
+            Response = proplists:get_value(<<"response">>, Params, <<>>),
+            % retrieve and check password
+            case get_password_hash(<<"admin">>, UserName, Realm) of
+                undefined ->
+                    {{false, digest_header()}, Req, State};
+                HA1 ->
+                    case lorawan_http_digest:response(Method, URI, <<>>, HA1, Nonce) of
+                        Response ->
+                            {true, Req, State};
+                        _Else ->
+                            {{false, digest_header()}, Req, State}
+                    end
             end;
-        _ ->
-            {{false, <<"Basic realm=\"lorawan-server\"">>}, Req, State}
+        _Else ->
+            {{false, digest_header()}, Req, State}
     end.
 
-authorized_password(Role, User, Pass) ->
-    case mnesia:dirty_read(users, User) of
-        % temporary provisions for backward compatibility
+digest_header() ->
+    Nonce = lorawan_http_digest:nonce(16),
+    lorawan_http_digest:header(digest, [
+        {<<"realm">>, ?REALM}, {<<"nonce">>, Nonce}]).
+
+get_password_hash(Role, UserName, Realm) ->
+    case mnesia:dirty_read(users, UserName) of
         [#user{pass=Pass, roles=undefined}] ->
-            true;
+            % temporary provisions for backward compatibility
+            lorawan_http_digest:ha1({UserName, Realm, Pass});
         [#user{pass=Pass, roles=Roles}] ->
-            lists:member(Role, Roles);
+            case lists:member(Role, Roles) of
+                true ->
+                    lorawan_http_digest:ha1({UserName, Realm, Pass});
+                false ->
+                    undefined
+            end;
         _Else ->
-            false
+            undefined
     end.
 
 check_health(#gateway{} = Gateway) ->
     check_health(Gateway, ?MODULE, [check_reception]);
 check_health(#link{} = Link) ->
-    check_health(Link, ?MODULE, [check_reset, check_battery, check_margin]);
+    check_health(Link, ?MODULE, [check_reset, check_battery, check_margin, check_adr]);
 check_health(_Other) ->
     undefined.
 
@@ -102,6 +129,21 @@ check_margin(#link{devstat=[{_Time, _Battery, Margin, MaxSNR}|_]}) ->
     end;
 check_margin(#link{}) ->
     undefined.
+
+check_adr(#link{last_rx=undefined}) ->
+    % no frame arrived yet, so we don't know the #link.adr_flag_use
+    undefined;
+check_adr(#link{adr_flag_set=0}) ->
+    % disabled, so we don't care
+    undefined;
+check_adr(#link{adr_flag_use=1, adr_flag_set=Flag, adr_set={TxPower, DataRate, Chans}})
+        when Flag >= 1, is_integer(TxPower), is_integer(DataRate), is_list(Chans) ->
+    % everything is correctly configured
+    ok;
+check_adr(#link{adr_flag_use=0, adr_flag_set=Flag}) when Flag >= 1 ->
+    {25, adr_not_supported};
+check_adr(#link{adr_flag_use=1, adr_flag_set=Flag}) when Flag >= 1 ->
+    {25, adr_misconfigured}.
 
 parse(Object) when is_map(Object) ->
     maps:map(fun(Key, Value) -> parse_field(Key, Value) end,

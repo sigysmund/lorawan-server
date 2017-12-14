@@ -63,6 +63,7 @@ On Linux systems with systemd you should:
  * Unpack the binary release to `/usr/lib/lorawan-server`
  * Copy `bin/lorawan-server.service` to `/lib/systemd/system`
  * Create a dedicated user by `useradd --home-dir /var/lib/lorawan-server --create-home lorawan`
+ * Create the `/var/log/lorawan-server` directory and make sure it is owned by the user `lorawan`
  * Start the server by `systemctl start lorawan-server`
 
 This will put the database into `/var/lib/lorawan-server` and server logs into
@@ -219,7 +220,17 @@ You will need the following prerequisites:
    * On Windows, install the [Node.js](https://nodejs.org/en/).
    * On Mac OS, run `brew install node`.
 
-Get the latest sources by:
+Note: It is [not recommended](https://www.debian.org/releases/stretch/amd64/release-notes/ch-information.en.html#libv8)
+to install Node.js (and npm) on the latest Debian 9 (Stretch) from the official
+Debian 9 repository. To use an
+[alternate repository](http://linuxbsdos.com/2017/06/26/how-to-install-node-js-lts-on-debian-9-stretch/),
+add the following to your `/etc/apt/sources.list` and run `apt-get update` before installation:
+```
+deb https://deb.nodesource.com/node_6.x stretch main
+deb-src https://deb.nodesource.com/node_6.x stretch main
+```
+
+Get the latest lorawan-server sources by:
 ```bash
 git clone https://github.com/gotthardp/lorawan-server.git
 cd lorawan-server
@@ -238,6 +249,18 @@ make release
 ```
 
 The release will be created in `lorawan-server/_build/default/rel/lorawan-server`.
+
+If you encounter issues with npm, please try to:
+ * Update your npm with `sudo npm install -g npm`
+ * Make sure github.com is listed in the list of known hosts by running `ssh github.com`,
+   which will fail but will also add github.com to your `.ssh/known_hosts`:
+   ```
+   The authenticity of host 'github.com (192.30.253.113)' can't be established.
+   RSA key fingerprint is SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.
+   Are you sure you want to continue connecting (yes/no)? yes
+   Warning: Permanently added 'github.com,192.30.253.113' (RSA) to the list of known hosts.
+   Permission denied (publickey).
+   ```
 
 According to the above installation instructions the server binaries are under
 `/usr/lib/lorawan-server`. To upgrade your installation you shall **replace** the

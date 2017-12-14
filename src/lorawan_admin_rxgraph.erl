@@ -39,9 +39,9 @@ get_rxframe(Req, #state{format=rgraph}=State) ->
     ActRec = lorawan_db:get_rxframes(lorawan_mac:hex_to_binary(DevAddr)),
     % guess which frequency band the device is using
     {Min, Max} = case ActRec of
-        [#rxframe{region=Region} | _] ->
+        [#rxframe{region=Region} | _] when is_binary(Region) ->
             lorawan_mac_region:freq_range(Region);
-        [] ->
+        _Else ->
             ?DEFAULT_RANGE
     end,
     % construct Google Chart DataTable
@@ -53,7 +53,8 @@ get_rxframe(Req, #state{format=rgraph}=State) ->
                 [{id, <<"freq">>}, {label, <<"Frequency (MHz)">>}, {type, <<"number">>}]
                 ]},
             {rows, lists:map(
-                fun(#rxframe{fcnt=FCnt, region=Region, powe=TXPower, rxq=#rxq{datr=DatR, freq=Freq}}) ->
+                fun(#rxframe{fcnt=FCnt, region=Region, powe=TXPower, rxq=#rxq{datr=DatR, freq=Freq}})
+                        when is_binary(Region) ->
                     [{c, [
                         [{v, FCnt}],
                         [{v, lorawan_mac_region:datar_to_dr(Region, DatR)}, {f, DatR}],

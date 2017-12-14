@@ -48,6 +48,9 @@ handle_cast({send, {Host, Port, Version}, #request{tmst=UStamp}, DevAddr, TxQ, R
 
 % PUSH DATA
 handle_info({udp, Socket, Host, Port, <<Version, Token:16, 0, MAC:8/binary, Data/binary>>}, #state{sock=Socket}=State) ->
+    % PUSH ACK
+    ok = gen_udp:send(Socket, Host, Port, <<Version, Token:16, 1>>),
+    % process packets after ack
     case catch jsx:decode(Data, [return_maps, {labels, atom}]) of
         Data2 when is_map(Data2) ->
             % lager:debug("---> ~p", [Data2]),
@@ -64,16 +67,14 @@ handle_info({udp, Socket, Host, Port, <<Version, Token:16, 0, MAC:8/binary, Data
         _Else ->
             lager:error("Ignored PUSH_DATA: JSON syntax error: ~s", [Data])
     end,
-    % PUSH ACK
-    ok = gen_udp:send(Socket, Host, Port, <<Version, Token:16, 1>>),
     {noreply, State};
 
 % PULL DATA
 handle_info({udp, Socket, Host, Port, <<Version, Token:16, 2, MAC:8/binary>>}, #state{sock=Socket}=State) ->
-    lorawan_gw_router:register(MAC, {global, ?MODULE}, {Host, Port, Version}),
-    lorawan_gw_router:status(MAC, undefined),
     % PULL ACK
     ok = gen_udp:send(Socket, Host, Port, <<Version, Token:16, 4>>),
+    lorawan_gw_router:register(MAC, {global, ?MODULE}, {Host, Port, Version}),
+    lorawan_gw_router:status(MAC, undefined),
     {noreply, State};
 
 % TX ACK
@@ -86,13 +87,18 @@ handle_info({udp, Socket, _Host, _Port, <<_Version, Token:16, 5, MAC:8/binary, D
                 {ok, cancel} = timer:cancel(Timer),
                 {atomic, ok} = mnesia:transaction(
                     fun() ->
-                        [G] = mnesia:read(gateways, MAC, write),
+                        Stats =
+                            case mnesia:read(gateway_stats, MAC, write) of
+                                [S] -> S;
+                                [] -> #gateway_stats{mac=MAC, dwell=[], delays=[]}
+                            end,
                         SDelay =
                             case UStamp of
                                 undefined -> undefined;
                                 Num -> DStamp-Num
                             end,
-                        mnesia:write(gateways, store_delay(G, {calendar:universal_time(), SDelay, AStamp-DStamp}), write)
+                        mnesia:write(gateway_stats,
+                            store_delay(Stats, {calendar:universal_time(), SDelay, AStamp-DStamp}), write)
                     end),
                 {Opq, Tkns};
             error ->
@@ -110,7 +116,8 @@ handle_info({udp, Socket, _Host, _Port, <<_Version, Token:16, 5, MAC:8/binary, D
                         undefined -> ok;
                         <<"NONE">> -> ok;
                         Error ->
-                            lorawan_gw_router:downlink_error(MAC, Opaque, Error)
+                            lorawan_gw_router:downlink_error(MAC, Opaque,
+                                list_to_binary(string:to_lower(binary_to_list(Error))))
                     end;
                 Else ->
                     lager:error("Ignored PUSH_DATA: JSON syntax error: ~w", [Else])
@@ -192,9 +199,9 @@ build_txpk(TxQ, RFch, Data) ->
         lists:zip(record_info(fields, txq), tl(tuple_to_list(TxQ)))
     ).
 
-store_delay(#gateway{delays=undefined}=Gateway, Delay) ->
-    Gateway#gateway{delays=[Delay]};
-store_delay(#gateway{delays=Past}=Gateway, Delay) ->
-    Gateway#gateway{delays=lists:sublist([Delay | Past], 50)}.
+store_delay(#gateway_stats{delays=undefined}=Stats, Delay) ->
+    Stats#gateway_stats{delays=[Delay]};
+store_delay(#gateway_stats{delays=Past}=Stats, Delay) ->
+    Stats#gateway_stats{delays=lists:sublist([Delay | Past], 50)}.
 
 % end of file

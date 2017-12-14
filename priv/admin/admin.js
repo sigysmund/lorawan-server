@@ -41,9 +41,11 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
     ];
 
     adr_choices = [
-        { value: 0, label: 'OFF' },
-        { value: 1, label: 'ON' },
-        { value: 2, label: 'Manual' },
+        { value: 0, label: 'Disabled' },
+        { value: 1, label: 'Auto-Adjust' },
+        { value: 2, label: 'Maintain' },
+        { value: 3, label: 'Set, then Auto-Adjust' },
+        { value: 4, label: 'Set, then Disable' },
     ];
 
     fcnt_choices = [
@@ -299,7 +301,8 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
     .sortField('deveui')
     .sortDir('ASC');
     devices.listView().filters([
-        nga.field('deveui').label('DevEUI'),
+        nga.field('deveui').label('DevEUI')
+            .validation({ pattern: '[A-Fa-f0-9]{16}' }),
         nga.field('app').label('Application'),
         nga.field('appid').label('Group')
     ]);
@@ -335,9 +338,9 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('link').label('Node')
             .attributes({ placeholder: 'e.g. ABC12345' })
             .validation({ pattern: '[A-Fa-f0-9]{8}' }),
-        nga.field('adr_flag_set', 'choice').label('Set ADR')
+        nga.field('adr_flag_set', 'choice').label('ADR mode')
             .choices(adr_choices)
-            .defaultValue(1),
+            .defaultValue(0),
         nga.field('adr_set.power', 'choice').label('Set power')
             .choices(function(entry) {
                 return power_choices.filter(function(item) {
@@ -391,7 +394,8 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
     .sortField('health_decay')
     .sortDir('DESC');
     nodes.listView().filters([
-        nga.field('devaddr').label('DevAddr'),
+        nga.field('devaddr').label('DevAddr')
+            .validation({ pattern: '[A-Fa-f0-9]{8}' }),
         nga.field('app').label('Application'),
         nga.field('appid').label('Group')
     ]);
@@ -434,9 +438,9 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             .targetEntity(gateways)
             .targetField(nga.field('mac')),
         // ADR
-        nga.field('adr_flag_set', 'choice').label('Set ADR')
+        nga.field('adr_flag_set', 'choice').label('ADR mode')
             .choices(adr_choices)
-            .defaultValue(1), // ON
+            .defaultValue(0), // Disabled
         nga.field('adr_set.power', 'choice').label('Set power')
             .choices(function(entry) {
                 return power_choices.filter(function(item) {
@@ -510,9 +514,9 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             ])
             .listActions(['delete']),
         // ADR
-        nga.field('adr_flag_set', 'choice').label('Set ADR')
+        nga.field('adr_flag_set', 'choice').label('ADR mode')
             .choices(adr_choices)
-            .defaultValue(1), // ON
+            .defaultValue(0), // Disabled
         nga.field('adr_set.power', 'choice').label('Set power')
             .choices(function(entry) {
                 return power_choices.filter(function(item) {
@@ -530,7 +534,10 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             .validation({ pattern: '[0-9]+(-[0-9]+)?(,[ ]*[0-9]+(-[0-9]+)?)*' }),
         nga.field('rxwin_set.rx1_dr_offset', 'number').label('Set RX1 DR offset'),
         nga.field('adr_flag_use', 'choice').label('Used ADR')
-            .choices(adr_choices)
+            .choices([
+                { value: 0, label: 'OFF' },
+                { value: 1, label: 'ON' }
+            ])
             .editable(false),
         nga.field('adr_use.chans').label('Used channels')
             .editable(false),
@@ -587,18 +594,21 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('mac', 'reference').label('MAC')
             .targetEntity(gateways)
             .targetField(nga.field('mac')),
-        nga.field('devaddr', 'reference').label('DevAddr')
-            .targetEntity(nodes)
-            .targetField(nga.field('devaddr')),
+        nga.field('devaddr').label('DevAddr')
+            .template(function(entry) {
+                return "<a href='/admin/#nodes/edit/" + entry.values.devaddr + "'>" + entry.values.devaddr + "</a>";
+            }),
         nga.field('app').label('Application'),
         nga.field('appid').label('Group'),
+        nga.field('rxq.rssi').label('U/L RSSI'),
         nga.field('rxq.lsnr').label('U/L SNR'),
         nga.field('fcnt', 'number').label('FCnt'),
         nga.field('confirm', 'boolean'),
         nga.field('port', 'number'),
         nga.field('data')
             .template(function(entry){
-                return "<div title='[ASCII] " + hextoascii(entry.values.data) + "'>" + entry.values.data + "</div>"
+                if(entry.values.data)
+                    return "<div title='[ASCII] " + hextoascii(entry.values.data) + "'>" + entry.values.data + "</div>"
             })
     ])
     .sortField('datetime');
@@ -606,7 +616,8 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
         nga.field('mac', 'reference').label('MAC')
             .targetEntity(gateways)
             .targetField(nga.field('mac')),
-        nga.field('devaddr').label('DevAddr'),
+        nga.field('devaddr').label('DevAddr')
+            .validation({ pattern: '[A-Fa-f0-9]{8}' }),
         nga.field('app').label('Application'),
         nga.field('appid').label('Group')
     ]);
@@ -719,7 +730,8 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
                 { value: 'device', label: 'device' },
                 { value: 'node', label: 'node' }
             ]),
-        nga.field('eid'),
+        nga.field('eid')
+            .validation({ pattern: '([A-Fa-f0-9]{2})+' }),
         nga.field('text', 'wysiwyg')
     ]);
     // add to the admin application
@@ -800,9 +812,10 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
                 nga.field('mac', 'reference').label('MAC')
                     .targetEntity(gateways)
                     .targetField(nga.field('mac')),
-                nga.field('devaddr', 'reference').label('DevAddr')
-                    .targetEntity(nodes)
-                    .targetField(nga.field('devaddr')),
+                nga.field('devaddr').label('DevAddr')
+                    .template(function(entry) {
+                        return "<a href='/admin/#nodes/edit/" + entry.values.devaddr + "'>" + entry.values.devaddr + "</a>";
+                    }),
                 nga.field('rxq.lsnr').label('U/L SNR')
             ])
             .sortField('datetime')
@@ -883,7 +896,11 @@ function hextoascii(val) {
     var str = '';
     for (var n = 0; n < hex.length; n += 2) {
         var char = parseInt(hex.substr(n, 2), 16);
-        if(char >= 0x20 && char <= 0x7E)
+        if(char == 0x26)
+            str += '&amp;';
+        else if(char == 0x27)
+            str += '&#39;';
+        else if (char >= 0x20 && char <= 0x7E)
             str += String.fromCharCode(char);
         else
             str += '.';

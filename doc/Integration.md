@@ -2,21 +2,40 @@
 
 ## Generic MQTT Server
 
-You can integrate with generic MQTT server, e.g. the
+You can integrate with generic MQTT server (message broker), e.g. the
 [RabbitMQ](https://www.rabbitmq.com/mqtt.html) or
 [Mosquitto](https://mosquitto.org).
 
+First of all, make sure you understand the
+[terminology and principles of messaging](http://www.rabbitmq.com/tutorials/tutorial-one-php.html)
+and that the MQTT protocol [is enabled](https://www.rabbitmq.com/mqtt.html)
+in your broker.
+
 Open the lorawan-server web-administration and create a Backend Connector:
  * *URI* defines the target host either as `mqtt://host:port` or `mqtts://host:port`
- * *Published Topic* is a pattern for constructing the message topic, e.g. `out/{devaddr}`.
- * *Subscribe* is a topic to be subscribed, e.g. `in/#`.
- * *Received Topic* is a template for parsing the topic of received messages, e.g. `in/{devaddr}`.
+ * *Published Topic* is a pattern for constructing the message topic
+   of uplinks, e.g. `out/{devaddr}`.
+ * *Subscribe* is a downlink topic to be subscribed by the lorawan-server,
+   e.g. `in/#`.
+ * *Received Topic* is a template for parsing the topic of received downlink
+   messages, e.g. `in/{devaddr}`.
 
 On the Authentication tab:
  * *Auth* shall be set to *Username+Password*, even when the *Name* and
    *Password/Key* are empty.
 
-To send a downlink message do e.g.
+In order to consume the uplink messages sent by your devices you have to subscribe
+at the message broker for the *Published Topic*, e.g. for `out/#` (or even just `#`) by:
+```bash
+mosquitto_sub -h 127.0.0.1 -p 1883 -t 'out/#' -u 'user' -P 'pass'
+```
+
+When using RabbitMQ, create a queue and then bind it to the `amq.topic` exchange
+using the `out.#` (or `#`) binding key. Note that while MQTT uses slashes ("/") for
+topic segment separators, RabbitMQ uses dots. RabbitMQ internally translates the two,
+so for example the MQTT topic `cities/london` becomes in RabbitMQ `cities.london`.
+
+To send a downlink message to one of your devices do e.g.
 ```bash
 mosquitto_pub -h 127.0.0.1 -p 1883 -t 'in/00112233' -m '{"data":"00"}' -u 'user' -P 'pass'
 ```
@@ -44,7 +63,7 @@ First, follow the AWS IoT guidelines to configure your IoT device:
 Then, open the lorawan-server web-administration and create an Backend Connector:
  * *URI* is the AWS *Endpoint* with the `mqtts://` prefix
  * *Published Topic* is a pattern for the publication topic, e.g. `out/{devaddr}`.
- * *Subscribe* is a topic to be subscribed, e.g. `in/#`.
+ * *Subscribe* is a topic to be subscribed by the lorawan-server, e.g. `in/#`.
  * *Received Topic* is a template for parsing the topic of received messages, e.g. `in/{devaddr}`.
 
 On the Authentication tab:
@@ -78,7 +97,8 @@ Then, open the lorawan-server web-administration and create an Backend Connector
  * *Published Topic* is a pattern for the publication topic,
    e.g. `iot-2/type/loramote/id/{deveui}/evt/status/fmt/json`, where loramote is
    the *device type* you created.
- * *Subscribe* is a topic to be subscribed, e.g. `iot-2/type/loramote/id/+/cmd/+/fmt/+`.
+ * *Subscribe* is a topic to be subscribed by the lorawan-server,
+   e.g. `iot-2/type/loramote/id/+/cmd/+/fmt/+`.
  * *Received Topic* is a template for parsing the topic of received messages,
    e.g. `iot-2/type/loramote/id/{deveui}/cmd/status/fmt/json`.
 
@@ -174,6 +194,39 @@ On the Authentication tab:
  * *Auth* should be set to *Username+Password*:
    * *Name* - Your Adafruit account name (see the last article in the list above).
    * *Password/Key* - Your Adafruit Key, NOT your account password (see above).
+
+Adafruit supports only a single value feeds, so it is a _limitation_, if your mote sends multiple values in one packet. Also, Adafruit
+IO expects the payload of the MQTT message to be either a simple string value, like "17" or "string", or a proper formatted JSON of the form { "value": data } (ex. {"value": 23.5}, {"value": "sometext"}, etc). It should be noted, that if the source of data, especially
+string data, is not really trustworthy or predictable it is safer to wrap the message into JSON packing, then to rely on the fact that
+normally the messages are not JSON-like.
+
+To achieve that you need to create a Handler with the `Format` field set to `Raw Data`, `Connector` field set to your Connector and `Parse Uplink`
+function with the code to parse your sensor data and create a simple string or a JSON string expected by Adafruit.
+
+This example function expects that the sensor is sending 16 bits of humidity, 16 bits of temperature (in tenths of a degree) and 1 byte checksum. It uses only temperature, because, as stated above, Adafruit feeds are single value. Temperature sign is encoded in the 16th bit.
+
+```erlang
+fun(_Port, <<_Humid:16, Temp0:16, _Csum>>) -> % Point 1
+TSign = Temp0 band 16#8000, % Point 2
+TVal = Temp0 band 16#7FFF, % Point 3
+case TSign of % Point 4
+  0 -> Temp = TVal / 10;
+  _ -> Temp = -(TVal / 10)
+end,
+[H|_] = io_lib:format("~w", [Temp]), % Point 5
+ <<"{\"value\":", (list_to_binary(H))/bytes, "}">> % Point 6
+end.
+```
+
+What this code does:
+1. Parse the data packet from the sensor into three fields: Humid, Temp0 and Csum. 16-bit, big-endian. Humid and Csum are not used,
+so their names are prefixed with _ sign.
+2. Get the sign indication (+/-) from the temperature value.
+3. Strip off the sign indication from the temperature value.
+4. According to the sign indication, get the temperature value in degrees instead of their tenths.
+5. io_lib:format() function converts a given value into text representation, but returns a list. So, as we have only one value, we
+take the first element of its result and drop everything else, resulting our value being a proper stringlist (H).
+6. Build the resulting binary value to be sent to Adafruit IO: `{"value": temperature}`.
 
 After all of this is ready, you need to select this Handler as a *Group* on your
 *Devices* or *Nodes* configuration page. And **don't forget** to set your *Application*

@@ -32,7 +32,7 @@ handle_info({mnesia_table_event, {delete, {Tab, Key}, _Id}}, State) ->
     handle_delete(Tab, Key),
     {noreply, State};
 handle_info(trim_tables, State) ->
-    [trim_rxframes(R) || R <- mnesia:dirty_all_keys(links)],
+    trim_rxframes(),
     [mnesia:dirty_delete(events, E) || E <- expired_events()],
     {noreply, State};
 handle_info(_Other, State) ->
@@ -44,6 +44,10 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+handle_delete(gateways, MAC) ->
+    lager:debug("Gateway ~p deleted", [lorawan_mac:binary_to_hex(MAC)]),
+    % delete linked records
+    ok = mnesia:dirty_delete(gateway_stats, MAC);
 handle_delete(links, DevAddr) ->
     lager:debug("Node ~p deleted", [lorawan_mac:binary_to_hex(DevAddr)]),
     % delete linked records
@@ -60,15 +64,31 @@ delete_matched(Table, Record) ->
         end,
         mnesia:dirty_select(Table, [{Record, [], ['$1']}])).
 
-trim_rxframes(DevAddr) ->
+trim_rxframes() ->
     {ok, Count} = application:get_env(lorawan_server, retained_rxframes),
+    Trimmed = lists:filter(
+        fun(D) ->
+            trim_rxframes(D, Count)
+        end,
+        lists:usort(
+            mnesia:dirty_select(rxframes, [{#rxframe{devaddr='$1', _='_'}, [], ['$1']}]))),
+    % log message
+    if
+        length(Trimmed) > 0 ->
+            lager:debug("Expired rxframes from ~p",
+                [[lorawan_mac:binary_to_hex(E) || E <- Trimmed]]);
+        true ->
+            ok
+    end.
+
+trim_rxframes(DevAddr, Count) ->
     case lorawan_db:get_last_rxframes(DevAddr, Count) of
         {[], _} ->
-            ok;
+            false;
         {ExpRec, _} ->
-            lager:debug("Expired ~w rxframes from ~w", [length(ExpRec), DevAddr]),
             lists:foreach(fun(R) -> mnesia:dirty_delete_object(rxframes, R) end,
-                ExpRec)
+                ExpRec),
+            true
     end.
 
 purge_txframes(DevAddr) ->
