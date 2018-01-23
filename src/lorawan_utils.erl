@@ -1,17 +1,36 @@
 %
-% Copyright (c) 2016-2017 Petr Gotthard <petr.gotthard@centrum.cz>
+% Copyright (c) 2016-2018 Petr Gotthard <petr.gotthard@centrum.cz>
 % All rights reserved.
 % Distributed under the terms of the MIT License. See the LICENSE file.
 %
 -module(lorawan_utils).
 
+-export([binary_to_hex/1, hex_to_binary/1, reverse/1]).
 -export([index_of/2]).
 -export([precise_universal_time/0, ms_diff/2, datetime_to_timestamp/1, apply_offset/2]).
 -export([throw_info/2, throw_info/3, throw_warning/2, throw_warning/3, throw_error/2, throw_error/3]).
 
--include_lib("lorawan_server_api/include/lorawan_application.hrl").
+-include("lorawan.hrl").
 
 -define(MEGA, 1000000).
+
+% stackoverflow.com/questions/3768197/erlang-ioformatting-a-binary-to-hex
+% a little magic from http://stackoverflow.com/users/2760050/himangshuj
+binary_to_hex(undefined) ->
+    undefined;
+binary_to_hex(Id) ->
+    << <<Y>> || <<X:4>> <= Id, Y <- integer_to_list(X,16)>>.
+
+hex_to_binary(undefined) ->
+    undefined;
+hex_to_binary(Id) ->
+    <<<<Z>> || <<X:8,Y:8>> <= Id,Z <- [binary_to_integer(<<X,Y>>,16)]>>.
+
+reverse(Bin) -> reverse(Bin, <<>>).
+reverse(<<>>, Acc) -> Acc;
+reverse(<<H:1/binary, Rest/binary>>, Acc) ->
+    reverse(Rest, <<H/binary, Acc/binary>>).
+
 
 index_of(Item, List) -> index_of(Item, List, 1).
 
@@ -77,7 +96,12 @@ throw_event(Severity, {Entity, undefined}, Text, Mark) ->
     write_event(Severity, {Entity, undefined}, Text, Mark);
 
 throw_event(Severity, {Entity, EID}, Text, Mark) ->
-    lager:log(Severity, self(), "~s ~s ~p", [Entity, lorawan_mac:binary_to_hex(EID), Text]),
+    if
+        Entity == server; Entity == connector ->
+            lager:log(Severity, self(), "~s ~s ~p", [Entity, EID, Text]);
+        true ->
+            lager:log(Severity, self(), "~s ~s ~p", [Entity, lorawan_utils:binary_to_hex(EID), Text])
+    end,
     write_event(Severity, {Entity, EID}, Text, Mark).
 
 write_event(Severity, {Entity, EID}, Text, unique) ->

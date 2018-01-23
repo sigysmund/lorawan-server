@@ -1,5 +1,5 @@
 %
-% Copyright (c) 2016-2017 Petr Gotthard <petr.gotthard@centrum.cz>
+% Copyright (c) 2016-2018 Petr Gotthard <petr.gotthard@centrum.cz>
 % All rights reserved.
 % Distributed under the terms of the MIT License. See the LICENSE file.
 %
@@ -13,6 +13,8 @@
 
 -export([handle_get/2]).
 -record(state, {name}).
+
+-include("lorawan_db.hrl").
 
 init(Req, _Opts) ->
     Name = cowboy_req:binding(name, Req),
@@ -30,18 +32,32 @@ content_types_provided(Req, State) ->
     ], Req, State}.
 
 handle_get(Req, #state{name=undefined}=State) ->
-    {ok, Modules} = application:get_env(lorawan_server, plugins),
+    {ok, Modules} = application:get_env(lorawan_server, applications),
     A = lists:map(
-        fun({Name, _Module}) -> [{name, Name}] end,
-        Modules),
-    {jsx:encode(A), Req, State};
+            fun({Name, _Module}) -> [{name, Name}] end,
+            Modules),
+    B = lists:map(
+            fun(Name) -> [{name, Name}] end,
+            mnesia:dirty_all_keys(handlers)),
+    {jsx:encode(A++B), Req, State};
 handle_get(Req, #state{name=Name}=State) ->
     {jsx:encode([{name, Name}]), Req, State}.
 
 resource_exists(Req, #state{name=undefined}=State) ->
     {true, Req, State};
 resource_exists(Req, #state{name=Name}=State) ->
-    {ok, Modules} = application:get_env(lorawan_server, plugins),
-    {proplists:is_defined(Name, Modules), Req, State}.
+    {ok, Modules} = application:get_env(lorawan_server, applications),
+    case proplists:is_defined(Name, Modules) of
+        true ->
+            {true, Req, State};
+        false ->
+            % if it's not internal, then it must be external
+            case mnesia:dirty_read(handlers, Name) of
+                [#handler{}] ->
+                    {true, Req, State};
+                [] ->
+                    {false, Req, State}
+            end
+    end.
 
 % end of file

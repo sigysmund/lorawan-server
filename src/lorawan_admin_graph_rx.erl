@@ -1,9 +1,9 @@
 %
-% Copyright (c) 2016 Petr Gotthard <petr.gotthard@centrum.cz>
+% Copyright (c) 2016-2018 Petr Gotthard <petr.gotthard@centrum.cz>
 % All rights reserved.
 % Distributed under the terms of the MIT License. See the LICENSE file.
 %
--module(lorawan_admin_rxgraph).
+-module(lorawan_admin_graph_rx).
 
 -export([init/2]).
 -export([is_authorized/2]).
@@ -13,8 +13,7 @@
 
 -export([get_rxframe/2]).
 
--include_lib("lorawan_server_api/include/lorawan_application.hrl").
--include("lorawan.hrl").
+-include("lorawan_db.hrl").
 -record(state, {format}).
 
 % range encompassing all possible LoRaWAN bands
@@ -34,16 +33,26 @@ content_types_provided(Req, State) ->
         {{<<"application">>, <<"json">>, []}, get_rxframe}
     ], Req, State}.
 
-get_rxframe(Req, #state{format=rgraph}=State) ->
+get_rxframe(Req, State) ->
     DevAddr = cowboy_req:binding(devaddr, Req),
-    ActRec = lorawan_db:get_rxframes(lorawan_mac:hex_to_binary(DevAddr)),
-    % guess which frequency band the device is using
-    {Min, Max} = case ActRec of
-        [#rxframe{region=Region} | _] when is_binary(Region) ->
-            lorawan_mac_region:freq_range(Region);
-        _Else ->
-            ?DEFAULT_RANGE
-    end,
+    ActRec = lorawan_db:get_rxframes(lorawan_utils:hex_to_binary(DevAddr)),
+    case ActRec of
+        [#rxframe{network=Name} | _] ->
+            case mnesia:dirty_read(networks, Name) of
+                [N] ->
+                    send_array(Req, N, DevAddr, ActRec, State);
+                [] ->
+                    send_empty(Req, DevAddr, State)
+            end;
+        [] ->
+            send_empty(Req, DevAddr, State)
+    end.
+
+send_empty(Req, DevAddr, State) ->
+    {jsx:encode([{devaddr, DevAddr}, {array, []}]), Req, State}.
+
+send_array(Req, #network{region=Region, max_eirp=MaxEIRP}, DevAddr, ActRec, #state{format=rgraph}=State) ->
+    {Min, Max} = lorawan_mac_region:freq_range(Region),
     % construct Google Chart DataTable
     % see https://developers.google.com/chart/interactive/docs/reference#dataparam
     Array = [{cols, [
@@ -53,12 +62,13 @@ get_rxframe(Req, #state{format=rgraph}=State) ->
                 [{id, <<"freq">>}, {label, <<"Frequency (MHz)">>}, {type, <<"number">>}]
                 ]},
             {rows, lists:map(
-                fun(#rxframe{fcnt=FCnt, region=Region, powe=TXPower, rxq=#rxq{datr=DatR, freq=Freq}})
-                        when is_binary(Region) ->
+                fun(#rxframe{fcnt=FCnt, powe=TXPower, gateways=Gateways})
+                        when is_number(TXPower), is_binary(Region) ->
+                    {_MAC, #rxq{datr=DatR, freq=Freq}} = hd(Gateways),
                     [{c, [
                         [{v, FCnt}],
                         [{v, lorawan_mac_region:datar_to_dr(Region, DatR)}, {f, DatR}],
-                        format_power(TXPower, lorawan_mac_region:powe_to_num(Region, TXPower)),
+                        [{v, MaxEIRP/2-TXPower}, {f, integer_to_binary(MaxEIRP - 2*TXPower)}],
                         [{v, Freq}]
                     ]}];
                 % if there are some unexpected data, show nothing
@@ -69,11 +79,7 @@ get_rxframe(Req, #state{format=rgraph}=State) ->
         ],
     {jsx:encode([{devaddr, DevAddr}, {array, Array}, {'band', [{minValue, Min}, {maxValue, Max}]}]), Req, State};
 
-get_rxframe(Req, #state{format=qgraph}=State) ->
-    DevAddr = cowboy_req:binding(devaddr, Req),
-    ActRec = lorawan_db:get_rxframes(lorawan_mac:hex_to_binary(DevAddr)),
-    % construct Google Chart DataTable
-    % see https://developers.google.com/chart/interactive/docs/reference#dataparam
+send_array(Req, #network{}, DevAddr, ActRec, #state{format=qgraph}=State) ->
     Array = [{cols, [
                 [{id, <<"fcnt">>}, {label, <<"FCnt">>}, {type, <<"number">>}],
                 [{id, <<"average_rssi">>}, {label, <<"Average RSSI (dBm)">>}, {type, <<"number">>}],
@@ -82,20 +88,18 @@ get_rxframe(Req, #state{format=qgraph}=State) ->
                 [{id, <<"snr">>}, {label, <<"SNR (dB)">>}, {type, <<"number">>}]
                 ]},
             {rows, lists:map(
-                fun(#rxframe{fcnt=FCnt, rxq=#rxq{rssi=RSSI, lsnr=SNR}, average_qs={AvgRSSI, AvgSNR}}) ->
+                fun(#rxframe{fcnt=FCnt, gateways=Gateways, average_qs=AverageQs}) ->
+                    {_MAC, #rxq{rssi=RSSI, lsnr=SNR}} = hd(Gateways),
+                    {AvgRSSI, AvgSNR} =
+                        if
+                            is_tuple(AverageQs) -> AverageQs;
+                            AverageQs == undefined -> {null, null}
+                        end,
                     [{c, [
                         [{v, FCnt}],
                         [{v, AvgRSSI}],
                         [{v, RSSI}],
                         [{v, AvgSNR}],
-                        [{v, SNR}]
-                    ]}];
-                (#rxframe{fcnt=FCnt, rxq=#rxq{rssi=RSSI, lsnr=SNR}}) ->
-                    [{c, [
-                        [{v, FCnt}],
-                        [{v, null}],
-                        [{v, RSSI}],
-                        [{v, null}],
                         [{v, SNR}]
                     ]}];
                 (_Else) ->
@@ -105,16 +109,11 @@ get_rxframe(Req, #state{format=qgraph}=State) ->
         ],
     {jsx:encode([{devaddr, DevAddr}, {array, Array}]), Req, State}.
 
-format_power(Index, Power) when is_integer(Power) ->
-    [{v, Index}, {f, integer_to_binary(Power)}];
-format_power(Index, _Power) ->
-    [{v, Index}].
-
 resource_exists(Req, State) ->
-    case mnesia:dirty_index_read(rxframes,
-            lorawan_mac:hex_to_binary(cowboy_req:binding(devaddr, Req)), #rxframe.devaddr) of
+    case mnesia:dirty_read(nodes,
+            lorawan_utils:hex_to_binary(cowboy_req:binding(devaddr, Req))) of
         [] -> {false, Req, State};
-        [_First|_Rest] -> {true, Req, State}
+        [_Node] -> {true, Req, State}
     end.
 
 % end of file

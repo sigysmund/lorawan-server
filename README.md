@@ -1,11 +1,16 @@
-# Compact server for private LoRa networks
+# Compact server for private LoRaWAN networks
 
 Open-source LoRaWAN Server that integrates both the network-server and the application-server.
-This is useful for application providers that operate their own LoRa network,
+This is useful for application providers that operate their own LoRaWAN network,
 or for device and application developers.
 
+**This is unstable release 0.5.0.** Migrating to this version will preserve the
+Device/Node addresses and security keys, but will delete many ADR parameters, which
+got moved to the Profile settings. You are required to review and complete
+the configuration before connecting any gateway or device!
+
 The server:
- * Implements the LoRaWAN Specification v1.0.1
+ * Implements the LoRaWAN Specification v1.0.2
  * Communicates with (any number of) remote LoRaWAN gateways. It currently supports:
    * All gateways based on the [Packet Forwarder](https://github.com/Lora-net/packet_forwarder),
      such as the Semtech LoRa demo kit,
@@ -20,20 +25,23 @@ The server:
    * [Microchip LoRa(TM) Technology Mote](http://www.microchip.com/Developmenttools/ProductDetails.aspx?PartNO=dm164138)
  * Invokes external applications. It currently supports connections via:
    * WebSocket protocol [RFC6455](https://tools.ietf.org/rfc/rfc6455.txt)
+   * HTTP/1.1 and HTTP/2 protocol (REST API)
    * [MQTT v3.1/v3.1.1](http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html),
      including applications hosted in
      [Amazon AWS IoT](https://aws.amazon.com/iot/),
      [IBM Watson IoT Platform](https://www.ibm.com/cloud-computing/bluemix/internet-of-things),
      [MathWorks ThingSpeak](https://thingspeak.com/),
-     [Microsoft Azure IoT Hub](https://azure.microsoft.com/en-us/services/iot-hub/)
+     [Microsoft Azure IoT Hub](https://azure.microsoft.com/en-us/services/iot-hub/),
+     [ThingsBoard Open-source IoT Platform](https://thingsboard.io),
      or [Adafruit IO](https://io.adafruit.com/)
+   * AMQP 0-9-1 to the [RabbitMQ](http://www.rabbitmq.com/)
  * Handles (any number of) Class A or Class C devices.
    * Supports both the node activation by personalization (ABP) and the
      over-the-air activation (OTAA).
    * Supports both unconfirmed and confirmed data uplink and downlink.
    * Supports multicast to user-defined groups.
-   * Supports EU 863-870, US 902-928, CN 779-787, EU 433, AU 915-928, CN 470-510,
-     KR 920-923 and AS923-JP bands.
+   * Supports all regions standartized in LoRaWAN 1.0.2 Regional Parameters for
+     Europe, US, China, Australia, Asia, South Korea and India.
  * Provides a network management interface.
    * Monitors the server, gateways and node health status and displays device
      battery and connection quality indicators.
@@ -45,8 +53,8 @@ The server:
    designed for building fault-tolerant systems.
  * Is free, distributed under the MIT license.
 
-The server aims to be an all-in-one software package for small private LoRa networks.
-However:
+The server aims to be an all-in-one software package for small private LoRaWAN
+networks. However:
  * You still need to buy your LoRaWAN Gateway.
  * You will need to deploy and maintain it yourself. (With my support.)
  * It will probably never support the sophisticated management features of the
@@ -64,7 +72,7 @@ We will gladly assist you. If you find a bug, you may also
 
 ## Documentation
 
-The lorawan-server includes all functions required to run a private LoRa network.
+The lorawan-server includes all functions required to run a private LoRaWAN network.
 It integrates your LoRaWAN network directly with your backend IT systems.
 The server is provided as a comprehensive package with a single configuration file
 and a single administration tool.
@@ -76,7 +84,7 @@ The main components of the lorawan-server are shown in the following figure:
 
 ### Usage
 
-The server behaviour is described in the [Communication Guide](doc/Communication.md).
+The server behaviour is described in the [Introduction](doc/Introduction.md).
 
 The [Installation Instructions](doc/Installation.md) describe how to build,
 install and configure the server. You can use a Debian package, download the binary
@@ -97,21 +105,19 @@ bin/lorawanctl stop
 ```
 
 You can administrate and manage the server via a set of web-pages or via a REST API
-as described in the [Administration Guide](doc/Administration.md) and in the
-[Adaptive Data Rate (ADR) Guide](doc/ADR.md).
-
-By default you can access the administration at http://*server*:8080, using
-"admin" as both username and password. After the installation you have to:
+as described in the [Administration Guide](doc/Administration.md). By default you
+can access the administration at http://*server*:8080, using "admin" as both
+username and password. After the installation you have to:
  * Change the default password to something more secure.
- * Add LoRaWAN gateways you want to use.
- * Configure each device you want to use, either as a personalized device (ABP) or
-   as an over-the-air activated (OTAA) device.
+ * Set parameters of your **Network** and add LoRaWAN **Gateways** you want to use.
+ * Define the device **Profiles**, one for each device type that you will have.
+ * Configure each device you want to use, either as a personalized **Node** (ABP)
+   or as an **Commissioned** and over-the-air activated (OTAA) device.
 
 ### Integration
 
-You can integrate lorawan-server with external applications using the WebSocket
-interface as described in the [WebSocket Guide](doc/WebSockets.md), or using MQTT
-as described in the [Backend Administration](doc/Backends.md). Instructions on
+You can integrate lorawan-server with external applications using Backend
+[Handlers](doc/Handlers.md) and [Connectors](doc/Connectors.md). Instructions on
 how to integrate with some major clouds such as AWS or Azure are provided in the
 [Integration Guide](doc/Integration.md).
 
@@ -169,7 +175,7 @@ Please let me know if you use the lorawan-server and want to be listed here.
 The lorawan-server is distributed under the terms of the MIT License.
 See the [LICENSE](LICENSE).
 
-Copyright (c) 2016-2017 Petr Gotthard
+Copyright (c) 2016-2018 Petr Gotthard
 
 ### Sponsors
 

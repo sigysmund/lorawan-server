@@ -1,5 +1,5 @@
 %
-% Copyright (c) 2016-2017 Petr Gotthard <petr.gotthard@centrum.cz>
+% Copyright (c) 2016-2018 Petr Gotthard <petr.gotthard@centrum.cz>
 % All rights reserved.
 % Distributed under the terms of the MIT License. See the LICENSE file.
 %
@@ -15,8 +15,7 @@
 
 -export([handle_get/2, handle_write/2]).
 
--include_lib("lorawan_server_api/include/lorawan_application.hrl").
--include("lorawan.hrl").
+-include("lorawan_db.hrl").
 
 -record(state, {table, key, field, fidx, module}).
 

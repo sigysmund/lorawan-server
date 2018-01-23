@@ -1,5 +1,5 @@
 %
-% Copyright (c) 2016-2017 Petr Gotthard <petr.gotthard@centrum.cz>
+% Copyright (c) 2016-2018 Petr Gotthard <petr.gotthard@centrum.cz>
 % All rights reserved.
 % Distributed under the terms of the MIT License. See the LICENSE file.
 %
@@ -13,7 +13,7 @@
 -export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--include_lib("lorawan_server_api/include/lorawan_application.hrl").
+-include("lorawan_db.hrl").
 -include("lorawan.hrl").
 
 -record(state, {sock, tokens}).
@@ -35,7 +35,7 @@ init([PktFwdOpts]) ->
 handle_call(_Request, _From, State) ->
     {stop, {error, unknownmsg}, State}.
 
-handle_cast({send, {Host, Port, Version}, #request{tmst=UStamp}, DevAddr, TxQ, RFCh, PHYPayload},
+handle_cast({send, {Host, Port, Version}, _GWState, AppState, TxQ, RFCh, PHYPayload},
         #state{sock=Socket, tokens=Tokens}=State) ->
     Pk = [{txpk, build_txpk(TxQ, RFCh, PHYPayload)}],
     % lager:debug("<--- ~p", [Pk]),
@@ -44,7 +44,7 @@ handle_cast({send, {Host, Port, Version}, #request{tmst=UStamp}, DevAddr, TxQ, R
     DStamp = erlang:monotonic_time(milli_seconds),
     % PULL RESP
     ok = gen_udp:send(Socket, Host, Port, <<Version, Token:16, 3, (jsx:encode(Pk))/binary>>),
-    {noreply, State#state{tokens=maps:put(Token, {Timer, DevAddr, UStamp, DStamp}, Tokens)}}.
+    {noreply, State#state{tokens=maps:put(Token, {Timer, AppState, DStamp}, Tokens)}}.
 
 % PUSH DATA
 handle_info({udp, Socket, Host, Port, <<Version, Token:16, 0, MAC:8/binary, Data/binary>>}, #state{sock=Socket}=State) ->
@@ -73,34 +73,19 @@ handle_info({udp, Socket, Host, Port, <<Version, Token:16, 0, MAC:8/binary, Data
 handle_info({udp, Socket, Host, Port, <<Version, Token:16, 2, MAC:8/binary>>}, #state{sock=Socket}=State) ->
     % PULL ACK
     ok = gen_udp:send(Socket, Host, Port, <<Version, Token:16, 4>>),
-    lorawan_gw_router:register(MAC, {global, ?MODULE}, {Host, Port, Version}),
-    lorawan_gw_router:status(MAC, undefined),
+    lorawan_gw_router:alive(MAC, {global, ?MODULE}, {Host, Port, Version}),
     {noreply, State};
 
 % TX ACK
 handle_info({udp, Socket, _Host, _Port, <<_Version, Token:16, 5, MAC:8/binary, Data/binary>>},
         #state{sock=Socket, tokens=Tokens}=State) ->
-    {Opaque, Tokens2} =
+    {AppState, Tokens2} =
         case maps:take(Token, Tokens) of
-            {{Timer, Opq, UStamp, DStamp}, Tkns} ->
+            {{Timer, AState, DStamp}, Tkns} ->
                 AStamp = erlang:monotonic_time(milli_seconds),
                 {ok, cancel} = timer:cancel(Timer),
-                {atomic, ok} = mnesia:transaction(
-                    fun() ->
-                        Stats =
-                            case mnesia:read(gateway_stats, MAC, write) of
-                                [S] -> S;
-                                [] -> #gateway_stats{mac=MAC, dwell=[], delays=[]}
-                            end,
-                        SDelay =
-                            case UStamp of
-                                undefined -> undefined;
-                                Num -> DStamp-Num
-                            end,
-                        mnesia:write(gateway_stats,
-                            store_delay(Stats, {calendar:universal_time(), SDelay, AStamp-DStamp}), write)
-                    end),
-                {Opq, Tkns};
+                lorawan_gw_router:network_delay(MAC, AStamp-DStamp),
+                {AState, Tkns};
             error ->
                 {undefined, Tokens}
         end,
@@ -116,7 +101,7 @@ handle_info({udp, Socket, _Host, _Port, <<_Version, Token:16, 5, MAC:8/binary, D
                         undefined -> ok;
                         <<"NONE">> -> ok;
                         Error ->
-                            lorawan_gw_router:downlink_error(MAC, Opaque,
+                            lorawan_gw_router:downlink_error(MAC, AppState,
                                 list_to_binary(string:to_lower(binary_to_list(Error))))
                     end;
                 Else ->
@@ -127,7 +112,7 @@ handle_info({udp, Socket, _Host, _Port, <<_Version, Token:16, 5, MAC:8/binary, D
 
 % something strange
 handle_info({udp, _Socket, _Host, _Port, Msg}, State) ->
-    lager:debug("Weird data ~w", [Msg]),
+    lager:warning("Weird data ~w", [Msg]),
     {noreply, State};
 
 handle_info({no_ack, Token}, #state{tokens=Tokens}=State) ->
@@ -148,16 +133,16 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 status(MAC, Pk) ->
-    lorawan_gw_router:status(MAC, ?to_record(stat, Pk)).
+    lorawan_gw_router:report(MAC, ?to_record(stat, Pk)).
 
 
 rxpk(MAC, PkList) ->
-    Stamp = erlang:monotonic_time(milli_seconds),
     lorawan_gw_router:uplinks(
         lists:map(
             fun(Pk) ->
-                {RxQ, Data} = parse_rxpk(Pk),
-                {#request{tmst=Stamp}, MAC, RxQ#rxq{srvtmst=Stamp}, Data}
+                {RxQ, PHYPayload} = parse_rxpk(Pk),
+                % the 'undefined' element (GWState) is used by other gateway adaptors
+                {{MAC, RxQ, undefined}, PHYPayload}
             end, PkList)).
 
 parse_rxpk(Pk) ->
@@ -198,10 +183,5 @@ build_txpk(TxQ, RFch, Data) ->
         [{modu, Modu}, {rfch, RFch}, {ipol, true}, {size, byte_size(Data)}, {data, base64:encode(Data)}],
         lists:zip(record_info(fields, txq), tl(tuple_to_list(TxQ)))
     ).
-
-store_delay(#gateway_stats{delays=undefined}=Stats, Delay) ->
-    Stats#gateway_stats{delays=[Delay]};
-store_delay(#gateway_stats{delays=Past}=Stats, Delay) ->
-    Stats#gateway_stats{delays=lists:sublist([Delay | Past], 50)}.
 
 % end of file

@@ -13,9 +13,13 @@ Unless you have Debian 9 (Stretch) you have to install the Erlang/OTP 19 or late
 ```bash
 wget https://packages.erlang-solutions.com/erlang-solutions_1.0_all.deb
 sudo dpkg -i erlang-solutions_1.0_all.deb
+```
 
+```bash
 sudo apt-get update
-sudo apt-get install erlang
+sudo apt-get install erlang-base erlang-crypto erlang-syntax-tools erlang-inets \
+    erlang-mnesia erlang-runtime-tools erlang-ssl erlang-public-key erlang-asn1 \
+    erlang-os-mon erlang-snmp erlang-xmerl
 ```
 
 Download the Debian package
@@ -83,10 +87,10 @@ in the `lorawan-server/bin` folder.
 You can also run the lorawan-server as a Windows service.
 The service can be managed from a Command Prompt (`cmd`) using
 `lorawan-service.bat <command>`, where the `<command>` could be:
- * *add* to add the service. Once added you can use the standard Windows control
+ - **add** to add the service. Once added you can use the standard Windows control
    panel administrative tools to start/stop or enable/disable the service.
- * *remove* to remove the previously added service.
- * *list* to display parameters of a previously added service.
+ - **remove** to remove the previously added service.
+ - **list** to display parameters of a previously added service.
 
 ### Using the Binary Release on Mac OS
 
@@ -144,10 +148,8 @@ For example:
 ```erlang
 [{lorawan_server, [
     % update this list to add/remove applications
-    {plugins, [
-        {<<"semtech-mote">>, lorawan_application_semtech_mote},
-        {<<"microchip-mote">>, lorawan_application_microchip_mote},
-        {<<"websocket">>, lorawan_application_websocket}]},
+    {applications, [
+        {<<"semtech-mote">>, lorawan_application_semtech_mote}]},
     % UDP port listening for packets from the packet_forwarder Gateway
     {packet_forwarder_listen, [{port, 1680}]},
     % HTTP port for web-administration and REST API
@@ -216,18 +218,30 @@ You will need the following prerequisites:
    * On Windows follow the [installation instructions](https://www.rebar3.org/docs/getting-started).
    * On Mac OS, run `brew install rebar`.
  * npm, the JavaScript package manager.
-   * On Linux, try typing `yum install npm` or `apt-get install npm`.
+   * On Linux follow the instructions bellow.
    * On Windows, install the [Node.js](https://nodejs.org/en/).
    * On Mac OS, run `brew install node`.
 
-Note: It is [not recommended](https://www.debian.org/releases/stretch/amd64/release-notes/ch-information.en.html#libv8)
-to install Node.js (and npm) on the latest Debian 9 (Stretch) from the official
-Debian 9 repository. To use an
-[alternate repository](http://linuxbsdos.com/2017/06/26/how-to-install-node-js-lts-on-debian-9-stretch/),
-add the following to your `/etc/apt/sources.list` and run `apt-get update` before installation:
+Make sure you have the run-time prerequisites:
+
+```bash
+sudo apt-get update
+sudo apt-get install erlang-base erlang-crypto erlang-syntax-tools erlang-inets \
+    erlang-mnesia erlang-runtime-tools erlang-ssl erlang-public-key erlang-asn1 \
+    erlang-os-mon erlang-snmp erlang-xmerl
+```
+
+Required `nodejs` can be installed from [here](https://github.com/nodesource/distributions).
+On Debian, add the following to your `/etc/apt/sources.list` and run `apt-get update`
+before installation:
 ```
 deb https://deb.nodesource.com/node_6.x stretch main
 deb-src https://deb.nodesource.com/node_6.x stretch main
+```
+
+Then, obtain the build prerequisites:
+```bash
+sudo apt-get install git erlang-dev erlang-src erlang-eunit nodejs
 ```
 
 Get the latest lorawan-server sources by:
@@ -271,8 +285,7 @@ content.
 
 On the Debian Linux and its clones like Raspbian you can use the .deb package.
 
-Build the Debian package bu running `make dpkg`. It will request your `root`
-password and then create a package
+Build the Debian package bu running `make release dpkg`. This will create
 `lorawan-server/_build/default/rel/lorawan-server/lorawan-server_<VERSION>.deb`.
 
 You can then install the package by:
