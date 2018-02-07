@@ -296,8 +296,11 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
             .attributes({ placeholder: 'e.g. 0-2' })
             .validation({ required: true, pattern: '[0-9]+(-[0-9]+)?(,[ ]*[0-9]+(-[0-9]+)?)*' }),
         nga.field('cflist', 'embedded_list').label('Channels')
-            .targetFields([ // which comment fields to display in the datagrid / form
+            .targetFields([
                 nga.field('freq', 'float').label('Frequency (MHz)')
+                    .validation({ required: true }),
+                nga.field('min_datr', 'number').label('Min Data Rate'),
+                nga.field('max_datr', 'number').label('Max Data Rate')
             ])
     ])
     .prepare(['$http', function($http) {
@@ -802,6 +805,9 @@ myApp.config(['NgAdminConfigurationProvider', function (nga) {
                 { value: 'datr', label: 'datr' },
                 { value: 'codr', label: 'codr' },
                 { value: 'best_gw', label: 'best_gw' },
+                { value: 'mac', label: 'mac' },
+                { value: 'lsnr', label: 'lsnr' },
+                { value: 'rssi', label: 'rssi' },
                 { value: 'all_gw', label: 'all_gw' }
             ]),
         nga.field('parse_uplink', 'text'),
